@@ -8,11 +8,17 @@ use Throwable;
 
 class GeminiLandAdvisoryService
 {
-    private const PROMPT_VERSION = 'v2';
+    private const PROMPT_VERSION = 'v3';
 
     private const LANG_EN = 'en';
 
     private const LANG_SW = 'sw';
+
+    private const FOLLOW_UP_MAX_WORDS = 120;
+
+    private const FOLLOW_UP_UNRELATED_MAX_WORDS = 45;
+
+    private const FOLLOW_UP_ACTION_MAX_WORDS = 28;
 
     /**
      * @return array{
@@ -134,7 +140,9 @@ class GeminiLandAdvisoryService
 
     /**
      * @return array{
+     *   related: bool,
      *   answer: string,
+     *   recommended_action: string,
      *   suggested_next_steps: array<int, string>,
      *   gemini: array<string, mixed>
      * }
@@ -155,12 +163,13 @@ class GeminiLandAdvisoryService
 
         if ($question === '') {
             $question = $responseLanguage === self::LANG_SW
-                ? 'Nifafanulie matokeo haya kwa kina kama mnunuzi na nielekeze hatua za kuchukua.'
-                : 'Please explain this result in detail for a buyer and what actions should be taken next.';
+                ? 'Nifafanulie matokeo haya kwa mnunuzi kwa ufupi wa vitendo.'
+                : 'Explain this verification result for a buyer in practical terms.';
         }
 
         $runtime = $this->runtimeConfig();
-        $fallbackAnswer = $this->buildChatFallbackAnswer(
+        $fallbackPayload = $this->buildFollowUpFallbackPayload(
+            $question,
             $verdict,
             $verdictLabel,
             $riskScore,
@@ -170,9 +179,7 @@ class GeminiLandAdvisoryService
         );
 
         if ($runtime['api_key'] === '') {
-            return [
-                'answer' => $fallbackAnswer,
-                'suggested_next_steps' => $this->fallbackChatSteps($verdict, $responseLanguage),
+            return array_merge($fallbackPayload, [
                 'gemini' => [
                     'model' => $runtime['model'],
                     'prompt_version' => self::PROMPT_VERSION,
@@ -182,7 +189,7 @@ class GeminiLandAdvisoryService
                     'target_language' => $responseLanguage,
                     'raw_response' => null,
                 ],
-            ];
+            ]);
         }
 
         $prompt = $this->buildChatPrompt(
@@ -201,9 +208,7 @@ class GeminiLandAdvisoryService
 
         $result = $this->requestModelJson($prompt, $runtime);
         if (! $result['ok']) {
-            return [
-                'answer' => $fallbackAnswer,
-                'suggested_next_steps' => $this->fallbackChatSteps($verdict, $responseLanguage),
+            return array_merge($fallbackPayload, [
                 'gemini' => [
                     'model' => $runtime['model'],
                     'prompt_version' => self::PROMPT_VERSION,
@@ -213,14 +218,12 @@ class GeminiLandAdvisoryService
                     'target_language' => $responseLanguage,
                     'raw_response' => $result['raw_response'],
                 ],
-            ];
+            ]);
         }
 
         $decoded = $this->decodeJsonStrict((string) $result['text']);
         if (! is_array($decoded)) {
-            return [
-                'answer' => $fallbackAnswer,
-                'suggested_next_steps' => $this->fallbackChatSteps($verdict, $responseLanguage),
+            return array_merge($fallbackPayload, [
                 'gemini' => [
                     'model' => $runtime['model'],
                     'prompt_version' => self::PROMPT_VERSION,
@@ -230,16 +233,15 @@ class GeminiLandAdvisoryService
                     'target_language' => $responseLanguage,
                     'raw_response' => $result['raw_response'],
                 ],
-            ];
+            ]);
         }
 
+        $related = $this->extractChatRelated($decoded);
         $answer = $this->extractChatAnswer($decoded);
-        $steps = $this->extractChatSteps($decoded);
-        $validationErrors = $this->validateChatResponse($decoded, $answer);
+        $recommendedAction = $this->extractChatRecommendedAction($decoded);
+        $validationErrors = $this->validateChatResponse($decoded, $related, $answer, $recommendedAction);
         if ($validationErrors !== []) {
-            return [
-                'answer' => $fallbackAnswer,
-                'suggested_next_steps' => $this->fallbackChatSteps($verdict, $responseLanguage),
+            return array_merge($fallbackPayload, [
                 'gemini' => [
                     'model' => $runtime['model'],
                     'prompt_version' => self::PROMPT_VERSION,
@@ -249,19 +251,29 @@ class GeminiLandAdvisoryService
                     'target_language' => $responseLanguage,
                     'raw_response' => $result['raw_response'],
                 ],
-            ];
+            ]);
         }
 
-        if ($answer === '') {
-            $answer = $fallbackAnswer;
+        $finalRelated = $related ?? true;
+        $answerLimit = $finalRelated ? self::FOLLOW_UP_MAX_WORDS : self::FOLLOW_UP_UNRELATED_MAX_WORDS;
+        $finalAnswer = $this->limitWords($answer, $answerLimit);
+        if ($finalAnswer === '') {
+            $finalAnswer = $fallbackPayload['answer'];
         }
 
-        if ($steps === []) {
-            $steps = $this->fallbackChatSteps($verdict, $responseLanguage);
+        $finalRecommendedAction = $this->limitWords($recommendedAction, self::FOLLOW_UP_ACTION_MAX_WORDS);
+        if ($finalRecommendedAction === '') {
+            $finalRecommendedAction = $fallbackPayload['recommended_action'];
         }
+
+        $steps = $finalRecommendedAction !== ''
+            ? [$finalRecommendedAction]
+            : $fallbackPayload['suggested_next_steps'];
 
         return [
-            'answer' => $answer,
+            'related' => $finalRelated,
+            'answer' => $finalAnswer,
+            'recommended_action' => $finalRecommendedAction,
             'suggested_next_steps' => $steps,
             'gemini' => [
                 'model' => $runtime['model'],
@@ -387,23 +399,22 @@ You are a Tanzanian land verification assistant helping a buyer understand a ver
 
 Return strict JSON only with exactly:
 {
+  "related": true,
   "answer": "string",
-  "suggested_next_steps": ["string"]
+  "recommended_action": "string"
 }
 
 Rules:
 1) Use only provided facts.
 2) Write in {$languageLabel} only.
-3) Answer buyer_question directly and use conversation_history to avoid repeating the same explanation.
-4) Give practical guidance for each relevant risk reason by covering:
-   - what that term means in simple language,
-   - likely impact if ignored (legal/financial/ownership consequences),
-   - what records or checks the buyer should request.
-5) Include where the buyer can seek help in Tanzania when relevant (District/Municipal Land Office, Ministry/Ardhi records desk, land tribunal, or licensed advocate).
-6) If verdict is CAUTION, explain what "Buy with caution" means in practice.
-7) If verdict is DO_NOT_BUY, explain legal and safety implications clearly.
-8) Do not change the verdict or risk score.
-9) Keep the answer clear and detailed, but not repetitive.
+3) Use conversation_history to avoid repeating prior explanation unless the buyer asks for recap.
+4) First respond directly to buyer_question, then add only necessary case context.
+5) If buyer_question is NOT related to this land verification case, set "related": false and provide an answer under 45 words asking for case-related questions only.
+6) If buyer_question is related, set "related": true and keep answer between 80 and 120 words.
+7) "recommended_action" must be one actionable sentence under 28 words.
+8) Do not change verdict or risk_score.
+9) If related and topic involves caveat/dispute/loan/certificate/rates/ownership, explain meaning and likely effect on buyer briefly.
+10) Do not output markdown or extra keys.
 
 INPUT:
 {
@@ -619,12 +630,25 @@ PROMPT;
         return $errors;
     }
 
-    private function validateChatResponse(array $decoded, string $answer): array
+    private function validateChatResponse(
+        array $decoded,
+        ?bool $related,
+        string $answer,
+        string $recommendedAction
+    ): array
     {
         $errors = [];
 
+        if (! is_bool($related)) {
+            $errors[] = 'Chat explainer related must be boolean.';
+        }
+
         if ($answer === '') {
             $errors[] = 'Chat explainer answer must be non-empty.';
+        }
+
+        if ($recommendedAction === '') {
+            $errors[] = 'Chat explainer recommended_action must be non-empty.';
         }
 
         return $errors;
@@ -726,6 +750,40 @@ PROMPT;
         return array_slice($normalized, -10);
     }
 
+    private function extractChatRelated(array $decoded): ?bool
+    {
+        $candidateKeys = ['related', 'is_related', 'relevant'];
+
+        foreach ($candidateKeys as $key) {
+            if (! array_key_exists($key, $decoded)) {
+                continue;
+            }
+
+            $value = $decoded[$key];
+            if (is_bool($value)) {
+                return $value;
+            }
+
+            if (is_string($value)) {
+                $normalized = strtolower(trim($value));
+                if (in_array($normalized, ['true', 'yes', '1'], true)) {
+                    return true;
+                }
+
+                if (in_array($normalized, ['false', 'no', '0'], true)) {
+                    return false;
+                }
+            }
+        }
+
+        $nested = $decoded['data'] ?? null;
+        if (is_array($nested)) {
+            return $this->extractChatRelated($nested);
+        }
+
+        return null;
+    }
+
     private function extractChatAnswer(array $decoded): string
     {
         $candidateKeys = ['answer', 'explanation', 'response', 'message'];
@@ -749,6 +807,34 @@ PROMPT;
         $nested = $decoded['data'] ?? null;
         if (is_array($nested)) {
             return $this->extractChatAnswer($nested);
+        }
+
+        return '';
+    }
+
+    private function extractChatRecommendedAction(array $decoded): string
+    {
+        $candidateKeys = ['recommended_action', 'recommendation', 'next_action', 'action'];
+
+        foreach ($candidateKeys as $key) {
+            if (! array_key_exists($key, $decoded)) {
+                continue;
+            }
+
+            $rawValue = $decoded[$key];
+            if (! is_string($rawValue) && ! is_numeric($rawValue) && ! is_bool($rawValue)) {
+                continue;
+            }
+
+            $value = trim((string) $rawValue);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        $nested = $decoded['data'] ?? null;
+        if (is_array($nested)) {
+            return $this->extractChatRecommendedAction($nested);
         }
 
         return '';
@@ -946,6 +1032,208 @@ PROMPT;
         }
 
         return trim($prefix.' '.$recommendation);
+    }
+
+    /**
+     * @return array{
+     *   related: bool,
+     *   answer: string,
+     *   recommended_action: string,
+     *   suggested_next_steps: array<int, string>
+     * }
+     */
+    private function buildFollowUpFallbackPayload(
+        string $question,
+        string $verdict,
+        string $verdictLabel,
+        int $riskScore,
+        array $reasons,
+        string $recommendation,
+        string $responseLanguage
+    ): array {
+        $related = $this->isFollowUpQuestionRelated($question, $reasons);
+
+        if (! $related) {
+            $answer = $responseLanguage === self::LANG_SW
+                ? 'Swali hili halihusiani moja kwa moja na matokeo ya uthibitishaji wa kiwanja hiki. Tafadhali uliza kuhusu sababu za hatari, umiliki, migogoro, caveat, cheti, au hatua za ununuzi salama.'
+                : 'That question is outside this land verification case. Please ask about this result, such as risk reasons, ownership issues, caveats, disputes, certificate status, or safe purchase steps.';
+
+            $action = $responseLanguage === self::LANG_SW
+                ? 'Uliza swali linalohusu kiwanja hiki tu, kwa mfano: caveat inaathiri nini kwa mnunuzi?'
+                : 'Ask a case-related follow-up, for example: what does caveat mean for this buyer?';
+
+            return [
+                'related' => false,
+                'answer' => $this->limitWords($answer, self::FOLLOW_UP_UNRELATED_MAX_WORDS),
+                'recommended_action' => $this->limitWords($action, self::FOLLOW_UP_ACTION_MAX_WORDS),
+                'suggested_next_steps' => [$this->limitWords($action, self::FOLLOW_UP_ACTION_MAX_WORDS)],
+            ];
+        }
+
+        $topic = $this->detectFollowUpTopic($question, $reasons);
+        $label = $verdictLabel !== '' ? $verdictLabel : $verdict;
+
+        if ($responseLanguage === self::LANG_SW) {
+            $answer = match ($topic) {
+                'caveat' => sprintf('Caveat ni zuio la kisheria linalowekwa kwenye kumbukumbu za ardhi kuonyesha kuna madai au shauri juu ya kiwanja. Kwa matokeo haya (%s, alama %d/100), caveat inaweza kuchelewesha au kusimamisha uhamisho wa umiliki hadi iondolewe rasmi. Kwa mnunuzi, hatari ni kulipa pesa wakati umiliki bado una pingamizi. Hakiki hati ya kuondoa caveat na uthibitisho wa ofisi ya ardhi kabla ya kusaini mkataba wa mwisho.', $label, $riskScore),
+                'dispute' => sprintf('Mgogoro wa kisheria unaonyesha umiliki au haki juu ya kiwanja bado unapingwa. Kwa matokeo haya (%s, alama %d/100), mgogoro unaweza kufanya uhamisho usikamilike au ubatilishwe baadaye. Athari kwa mnunuzi ni kuchelewa, gharama za kisheria, au kupoteza usalama wa umiliki. Omba kumbukumbu rasmi za shauri, hatua ya kesi, na uthibitisho wa hali ya sasa kutoka ofisi husika kabla ya malipo ya mwisho.', $label, $riskScore),
+                'loan' => sprintf('Dhamana ya benki au mkopo unaohusishwa na kiwanja humaanisha taasisi ya fedha inaweza kuwa na haki ya kisheria juu ya mali hiyo. Kwa matokeo haya (%s, alama %d/100), ununuzi bila kuondoa mzigo huo unaweza kuwa hatari kwa mnunuzi. Hakikisha kuna nyaraka rasmi za kuondoa dhamana, barua ya benki, na uthibitisho wa kumbukumbu za ardhi kabla ya kuhamisha fedha za mwisho.', $label, $riskScore),
+                'double_allocation' => sprintf('Ugawaji wa mara mbili humaanisha kiwanja kinaweza kuwa kimetolewa kwa wadai zaidi ya mmoja. Hii ni hatari kubwa ya umiliki kwa mnunuzi kwa sababu inaweza kusababisha mzozo wa haki ya kumiliki hata baada ya malipo. Kwa matokeo haya (%s, alama %d/100), hakiki rekodi ya umiliki katika ofisi ya ardhi na linganisha nyaraka zote za ugawaji/uhamisho kabla ya mkataba.', $label, $riskScore),
+                'ownership' => sprintf('Maswali ya umiliki yanahitaji uthibitisho wa mnyororo wa uhamisho kutoka mmiliki wa kwanza hadi wa sasa. Ikiwa kuna kutolingana, mnunuzi anaweza kukutana na madai ya baadaye au mkataba kutotambulika. Kwa matokeo haya (%s, alama %d/100), omba nyaraka za kila uhamisho, hakiki jina la mmiliki wa sasa kwenye kumbukumbu rasmi, na usifanye malipo ya mwisho kabla ya ulinganifu kamili.', $label, $riskScore),
+                'rates' => sprintf('Kodi ya ardhi isiyolipwa inaweza kuleta vikwazo vya kisheria na kuchelewesha uhamisho wa umiliki. Kwa matokeo haya (%s, alama %d/100), mnunuzi anapaswa kuhakikisha hakuna deni linalobaki kabla ya kuendelea. Omba hati rasmi ya malipo au uthibitisho wa clearance kutoka mamlaka husika. Bila hilo, unaweza kurithi mzigo wa deni au kukwama kwenye hatua za usajili wa umiliki.', $label, $riskScore),
+                'certificate' => sprintf('Uhalali wa cheti ni msingi wa usalama wa umiliki kwa mnunuzi. Cheti kilichoisha muda, kisicho sahihi, au kisicholingana na kumbukumbu huongeza hatari ya kisheria. Kwa matokeo haya (%s, alama %d/100), hakiki tarehe, aina ya cheti, na ulinganifu wa taarifa zote katika ofisi ya ardhi kabla ya kusaini. Hatua hii hupunguza hatari ya kununua mali yenye dosari za kisheria.', $label, $riskScore),
+                default => sprintf('Swali lako linahusu tathmini hii ya kiwanja. Matokeo ya sasa ni %s na alama ya hatari ni %d/100, hivyo maamuzi ya ununuzi yanapaswa kutegemea sababu zilizobainishwa na uthibitisho rasmi wa nyaraka. Kipaumbele ni kuhakiki umiliki, hali ya kisheria, na uhalali wa nyaraka kabla ya malipo ya mwisho. Ukiwa na jambo maalum kama caveat, mgogoro, au cheti, uliza moja kwa moja ili nipatie maelekezo lengwa zaidi.', $label, $riskScore),
+            };
+        } else {
+            $answer = match ($topic) {
+                'caveat' => sprintf('A caveat is a legal notice placed on land records to show an active claim or restriction. In this case (%s, risk score %d/100), a caveat can delay or block transfer until it is formally lifted. The buyer risk is paying while ownership rights are still constrained. Before final payment, request official caveat clearance evidence, the latest land search, and confirmation from the land office that transfer can proceed lawfully.', $label, $riskScore),
+                'dispute' => sprintf('An ongoing legal dispute means ownership or land rights are still being contested. With this result (%s, risk score %d/100), transfer may be delayed, challenged, or reversed later. Buyer exposure includes legal costs and title uncertainty after payment. Ask for official case status, dispute references, and written confirmation from relevant authorities before finalizing the purchase. Do not rely only on verbal assurances from the seller.', $label, $riskScore),
+                'loan' => sprintf('A bank loan or encumbrance means a lender may hold legal rights over the property. For this case (%s, risk score %d/100), buying before discharge can expose the buyer to enforcement or transfer failure. Request formal discharge documents, lender confirmation, and updated land records showing the charge is cleared. Final payment should wait until all encumbrance evidence is verified against official land office records.', $label, $riskScore),
+                'double_allocation' => sprintf('Double allocation means the same plot may have been assigned to more than one party. This is a high ownership conflict risk because competing claims can surface even after payment. With this case outcome (%s, risk score %d/100), verify allocation history, transfer chain, and current official ownership record before signing. A clean and consistent record trail is essential to reduce legal exposure for the buyer.', $label, $riskScore),
+                'ownership' => sprintf('Ownership issues require a complete chain-of-title check from earlier transfers to the current owner. If records are inconsistent, the buyer may face future claims or registration rejection. In this case (%s, risk score %d/100), insist on verified transfer documents for each ownership change and confirm the present owner in official land records. Final payment should only happen after documentary alignment is confirmed.', $label, $riskScore),
+                'rates' => sprintf('Unpaid land rates can create legal and administrative barriers during transfer. In this case (%s, risk score %d/100), the buyer should confirm all rates are cleared before completion. Ask for official payment receipts or a rates clearance document from the relevant authority. Without this, you may inherit outstanding liabilities or face delays in ownership registration after purchase.', $label, $riskScore),
+                'certificate' => sprintf('Certificate validity is central to secure ownership transfer. If a certificate is expired, inconsistent, or weak in status, buyer risk increases significantly. For this case (%s, risk score %d/100), verify certificate dates, type, and record consistency at the land office before signing. This protects against buying land with unresolved legal defects that can undermine transfer certainty.', $label, $riskScore),
+                default => sprintf('Your question is related to this land verification case. The current result is %s with a risk score of %d/100, so next decisions should follow documented risk reasons and official records verification. Focus on ownership consistency, legal restrictions, and certificate status before final payment. If you want, ask one specific item (for example caveat, dispute, loan, or certificate) and I will give a precise action-focused answer.', $label, $riskScore),
+            };
+        }
+
+        $recommendedAction = $this->followUpRecommendedAction($topic, $verdict, $responseLanguage, $recommendation);
+        $recommendedAction = $this->limitWords($recommendedAction, self::FOLLOW_UP_ACTION_MAX_WORDS);
+
+        return [
+            'related' => true,
+            'answer' => $this->limitWords($answer, self::FOLLOW_UP_MAX_WORDS),
+            'recommended_action' => $recommendedAction,
+            'suggested_next_steps' => [$recommendedAction],
+        ];
+    }
+
+    private function isFollowUpQuestionRelated(string $question, array $reasons): bool
+    {
+        $normalized = strtolower(trim($question));
+        if ($normalized === '') {
+            return true;
+        }
+
+        $landKeywords = [
+            'land', 'plot', 'title', 'ownership', 'owner', 'transfer', 'certificate', 'caveat',
+            'dispute', 'loan', 'encumbrance', 'risk', 'verdict', 'score', 'rate', 'allocation',
+            'kiwanja', 'ardhi', 'umiliki', 'cheti', 'mgogoro', 'mkopo', 'dhamana', 'tahadhari',
+            'kodi', 'uhamisho', 'caveat',
+        ];
+
+        foreach ($landKeywords as $keyword) {
+            if (str_contains($normalized, $keyword)) {
+                return true;
+            }
+        }
+
+        $offTopicKeywords = [
+            'weather', 'football', 'soccer', 'movie', 'music', 'joke', 'recipe',
+            'bitcoin', 'crypto', 'stock', 'politics', 'nba', 'nfl', 'premier league',
+            'hali ya hewa', 'mpira', 'muziki', 'utani', 'chakula',
+        ];
+
+        foreach ($offTopicKeywords as $keyword) {
+            if (str_contains($normalized, $keyword)) {
+                return false;
+            }
+        }
+
+        $reasonsText = strtolower(implode(' ', $reasons));
+        $questionTokens = preg_split('/\s+/', $normalized) ?: [];
+        foreach ($questionTokens as $token) {
+            $token = trim($token);
+            if (strlen($token) < 5) {
+                continue;
+            }
+
+            if (str_contains($reasonsText, $token)) {
+                return true;
+            }
+        }
+
+        return true;
+    }
+
+    private function detectFollowUpTopic(string $question, array $reasons): string
+    {
+        $normalized = strtolower(trim($question));
+
+        $topicMap = [
+            'caveat' => ['caveat', 'zuio'],
+            'dispute' => ['dispute', 'mgogoro', 'court', 'mahakama', 'tribunal'],
+            'loan' => ['loan', 'encumbrance', 'bank', 'mkopo', 'dhamana'],
+            'double_allocation' => ['double allocation', 'ugawaji wa mara mbili', 'allocation'],
+            'ownership' => ['owner', 'ownership', 'umiliki', 'transfer', 'uhamisho'],
+            'rates' => ['land rate', 'rates', 'kodi ya ardhi', 'kodi'],
+            'certificate' => ['certificate', 'title deed', 'cheti', 'hatimiliki'],
+        ];
+
+        foreach ($topicMap as $topic => $keywords) {
+            foreach ($keywords as $keyword) {
+                if (str_contains($normalized, $keyword)) {
+                    return $topic;
+                }
+            }
+        }
+
+        $reasonsText = strtolower(implode(' ', $reasons));
+        foreach ($topicMap as $topic => $keywords) {
+            foreach ($keywords as $keyword) {
+                if (str_contains($reasonsText, $keyword)) {
+                    return $topic;
+                }
+            }
+        }
+
+        return 'general';
+    }
+
+    private function followUpRecommendedAction(
+        string $topic,
+        string $verdict,
+        string $responseLanguage,
+        string $recommendation
+    ): string {
+        if ($responseLanguage === self::LANG_SW) {
+            return match ($topic) {
+                'caveat' => 'Omba uthibitisho rasmi wa kuondoa caveat kutoka ofisi ya ardhi kabla ya malipo ya mwisho.',
+                'dispute' => 'Pata status rasmi ya shauri na usiendelee na mkataba hadi mgogoro ufungwe kwa maandishi.',
+                'loan' => 'Hakikisha benki imetoa hati rasmi ya kuondoa dhamana na uhakiki kwenye kumbukumbu za ardhi.',
+                'double_allocation' => 'Linganisheni rekodi zote za umiliki katika ofisi ya ardhi na usilipe kabla ya uthibitisho wa mwisho.',
+                'ownership' => 'Hakiki mnyororo wa uhamisho wa umiliki kwa nyaraka rasmi kabla ya kusaini mkataba.',
+                'rates' => 'Omba clearance ya kodi ya ardhi kutoka mamlaka husika kabla ya kuendelea na ununuzi.',
+                'certificate' => 'Thibitisha uhalali wa cheti na ulinganifu wa taarifa zake katika ofisi ya ardhi.',
+                default => $recommendation !== '' ? $recommendation : $this->fallbackRecommendation($verdict, $responseLanguage),
+            };
+        }
+
+        return match ($topic) {
+            'caveat' => 'Request official caveat removal confirmation from the land office before any final payment.',
+            'dispute' => 'Obtain official dispute status and pause contract execution until written legal clearance is provided.',
+            'loan' => 'Require formal bank discharge documents and verify cleared encumbrance in land records.',
+            'double_allocation' => 'Reconcile ownership records at the land office and defer payment until final confirmation.',
+            'ownership' => 'Verify full chain-of-title transfer documents before signing any purchase agreement.',
+            'rates' => 'Request official land rates clearance from the relevant authority before purchase completion.',
+            'certificate' => 'Confirm certificate validity and record consistency directly at the land office.',
+            default => $recommendation !== '' ? $recommendation : $this->fallbackRecommendation($verdict, $responseLanguage),
+        };
+    }
+
+    private function limitWords(string $text, int $maxWords): string
+    {
+        $clean = trim($text);
+        if ($clean === '' || $maxWords <= 0) {
+            return '';
+        }
+
+        $words = preg_split('/\s+/', $clean) ?: [];
+        if (count($words) <= $maxWords) {
+            return $clean;
+        }
+
+        return implode(' ', array_slice($words, 0, $maxWords));
     }
 
     private function buildChatFallbackAnswer(

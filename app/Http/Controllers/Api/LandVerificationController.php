@@ -608,7 +608,9 @@ class LandVerificationController extends Controller
         return $this->success(__('api.land_verification.assistant.explained'), [
             'verification_log_id' => $verificationLog->id,
             'assistant' => [
+                'related' => (bool) ($aiResponse['related'] ?? true),
                 'answer' => $aiResponse['answer'],
+                'recommended_action' => (string) ($aiResponse['recommended_action'] ?? ''),
                 'suggested_next_steps' => $aiResponse['suggested_next_steps'],
             ],
             'assessment' => [
