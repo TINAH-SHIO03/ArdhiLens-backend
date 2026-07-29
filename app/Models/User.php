@@ -20,6 +20,12 @@ class User extends Authenticatable
         'phone_number',
         'is_active',
         'verified_at',
+        'email_verified_at',
+        'kyc_status',
+        'kyc_submitted_at',
+        'kyc_notes',
+        'face_match_score',
+        'face_match_passed',
     ];
 
     protected $hidden = [
@@ -30,7 +36,10 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'verified_at'       => 'datetime',
+        'kyc_submitted_at'  => 'datetime',
         'is_active'         => 'boolean',
+        'face_match_passed' => 'boolean',
+        'face_match_score'  => 'decimal:2',
         'password'          => 'hashed',
     ];
 
@@ -50,6 +59,46 @@ class User extends Authenticatable
     public function verificationLogs()
     {
         return $this->hasMany(VerificationLog::class);
+    }
+
+    /**
+     * Get all notifications for this user
+     */
+    public function notifications()
+    {
+        return $this->hasMany(UserNotification::class);
+    }
+
+    /**
+     * Get unread notifications count
+     */
+    public function unreadNotificationsCount(): int
+    {
+        return $this->notifications()->unread()->count();
+    }
+
+    /**
+     * Get all documents uploaded by this user
+     */
+    public function documents()
+    {
+        return $this->hasMany(Document::class);
+    }
+
+    /**
+     * Get all certificates for this user
+     */
+    public function certificates()
+    {
+        return $this->hasMany(VerificationCertificate::class);
+    }
+
+    /**
+     * Get device tokens for push notifications
+     */
+    public function deviceTokens()
+    {
+        return $this->hasMany(DeviceToken::class);
     }
 
     // ─── Helper Methods ──────────────────────────────────────────

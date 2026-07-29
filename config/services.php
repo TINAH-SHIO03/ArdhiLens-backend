@@ -48,4 +48,17 @@ return [
         ),
     ],
 
+    'nida' => [
+        'driver' => env('NIDA_DRIVER', 'local'), // local | http
+        'base_url' => env('NIDA_BASE_URL'),
+        'api_key' => env('NIDA_API_KEY'),
+    ],
+
+    'face_match' => [
+        'provider' => env('FACE_MATCH_PROVIDER', 'heuristic'), // heuristic | http
+        'api_url' => env('FACE_MATCH_API_URL'),
+        'api_key' => env('FACE_MATCH_API_KEY'),
+        'pass_threshold' => (float) env('FACE_MATCH_PASS_THRESHOLD', 62),
+    ],
+
 ];

@@ -4,6 +4,7 @@
 // ============================================================
 namespace App\Models;
 
+use App\Events\PlotStatusChanged;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -11,6 +12,29 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 class Plot extends Model
 {
     use HasFactory, SoftDeletes;
+
+    public ?string $statusBeforeUpdate = null;
+
+    protected static function booted(): void
+    {
+        static::updating(function (Plot $plot): void {
+            if ($plot->isDirty('status')) {
+                $plot->statusBeforeUpdate = (string) $plot->getOriginal('status');
+            }
+        });
+
+        static::updated(function (Plot $plot): void {
+            if ($plot->statusBeforeUpdate !== null
+                && $plot->statusBeforeUpdate !== (string) $plot->status) {
+                PlotStatusChanged::dispatch(
+                    $plot,
+                    $plot->statusBeforeUpdate,
+                    (string) $plot->status,
+                );
+                $plot->statusBeforeUpdate = null;
+            }
+        });
+    }
 
     protected $fillable = [
         'plot_reference',
@@ -22,6 +46,8 @@ class Plot extends Model
         'street',
         'gps_latitude',
         'gps_longitude',
+        'boundary_geojson',
+        'boundary_buffer_meters',
         'size_hectares',
         'land_use',
         'tenure_type',
@@ -42,6 +68,8 @@ class Plot extends Model
         'double_allocation_flag'      => 'boolean',
         'gps_latitude'                => 'decimal:8',
         'gps_longitude'               => 'decimal:8',
+        'boundary_geojson'            => 'array',
+        'boundary_buffer_meters'      => 'integer',
         'size_hectares'               => 'decimal:4',
     ];
 
@@ -91,7 +119,7 @@ class Plot extends Model
 
     public function scopeByReference($query, string $reference)
     {
-        return $query->where('plot_reference', $reference);
+        return $query->whereRaw('LOWER(plot_reference) = ?', [strtolower($reference)]);
     }
 
     // ─── Helper Methods ──────────────────────────────────────────

@@ -2,11 +2,15 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\RiskScoreAlert;
+use App\Events\VerificationCompleted;
 use App\Http\Controllers\Controller;
 use App\Models\Nida;
 use App\Models\Plot;
 use App\Models\PlotOwnershipHistory;
+use App\Models\VerificationAttemptLog;
 use App\Models\VerificationLog;
+use App\Services\CertificateService;
 use App\Services\LandVerification\GeminiLandAdvisoryService;
 use App\Services\LandVerification\RiskScoringService;
 use Illuminate\Http\JsonResponse;
@@ -23,11 +27,11 @@ class LandVerificationController extends Controller
 
     private const SESSION_TTL_MINUTES = 30;
 
-    private const CHALLENGE_TTL_MINUTES = 5;
+    private const CHALLENGE_TTL_MINUTES = 10;
 
     private const MAX_CHALLENGE_ATTEMPTS = 3;
 
-    private const DEFAULT_MAX_DISTANCE_METERS = 150.0;
+    private const DEFAULT_MAX_DISTANCE_METERS = 250.0;
 
     public function findPlot(Request $request): JsonResponse
     {
@@ -49,7 +53,7 @@ class LandVerificationController extends Controller
         }
 
         $plot = Plot::query()
-            ->where('plot_reference', $validated['plot_reference'])
+            ->whereRaw('LOWER(plot_reference) = ?', [strtolower($validated['plot_reference'])])
             ->first();
 
         if (! $plot) {
@@ -58,8 +62,23 @@ class LandVerificationController extends Controller
 
         $token = (string) Str::uuid();
 
+        $verificationMode = $user->isSeller() ? 'seller_ownership' : 'buyer_verification';
+
+        if ($user->isSeller()) {
+            $ownsPlot = $user->nin && $plot->owner_nida === $user->nin;
+            if (! $ownsPlot) {
+                return $this->error(
+                    __('api.land_verification.seller_plot_not_linked'),
+                    ['hint' => 'Complete KYC with the NIN registered as owner of this plot.'],
+                    403
+                );
+            }
+        }
+
         $session = [
             'user_id' => (int) $user->id,
+            'user_role' => strtolower((string) $user->role),
+            'verification_mode' => $verificationMode,
             'plot_id' => $plot->id,
             'plot_reference' => $plot->plot_reference,
             'steps' => [
@@ -88,6 +107,12 @@ class LandVerificationController extends Controller
             'verification_token' => ['required', 'string'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
+            'accuracy_meters' => ['nullable', 'numeric', 'min:0', 'max:5000'],
+            'altitude' => ['nullable', 'numeric'],
+            'speed_mps' => ['nullable', 'numeric', 'min:0'],
+            // remote (default): verify any plot without requiring the user to be there
+            // on_site: hard proximity gate for field audits
+            'mode' => ['nullable', 'string', 'in:remote,on_site'],
         ]);
 
         if ($validator->fails()) {
@@ -98,6 +123,7 @@ class LandVerificationController extends Controller
 
         $validated = $validator->validated();
         $token = $validated['verification_token'];
+        $mode = $validated['mode'] ?? 'remote';
         $session = $this->getSession($token);
 
         if (! $session) {
@@ -127,25 +153,39 @@ class LandVerificationController extends Controller
         $submittedLatitude = (float) $validated['latitude'];
         $submittedLongitude = (float) $validated['longitude'];
 
-        $distanceMeters = $this->haversineMeters(
+        $geo = app(\App\Services\GeospatialService::class)->verifyLocation(
+            $plot,
             $submittedLatitude,
             $submittedLongitude,
-            (float) $plot->gps_latitude,
-            (float) $plot->gps_longitude,
+            isset($validated['accuracy_meters']) ? (float) $validated['accuracy_meters'] : null,
+            isset($validated['altitude']) ? (float) $validated['altitude'] : null,
+            isset($validated['speed_mps']) ? (float) $validated['speed_mps'] : null,
         );
 
-        $allowedDistanceMeters = (float) config('land_verification.max_distance_meters', self::DEFAULT_MAX_DISTANCE_METERS);
-        $passed = $distanceMeters <= $allowedDistanceMeters;
+        $nearPlot = (bool) $geo['passed'];
+
+        if ($mode === 'remote') {
+            // Always allow continuing; classify presence for trust label only.
+            $passed = true;
+            $verificationMode = $nearPlot ? 'verified_on_site' : 'remote_check';
+            $geo['passed'] = true;
+            $geo['proximity_passed'] = $nearPlot;
+            $geo['verification_mode'] = $verificationMode;
+            $geo['mode'] = 'remote';
+        } else {
+            $passed = $nearPlot;
+            $verificationMode = $nearPlot ? 'verified_on_site' : 'on_site_failed';
+            $geo['proximity_passed'] = $nearPlot;
+            $geo['verification_mode'] = $verificationMode;
+            $geo['mode'] = 'on_site';
+        }
 
         $session['steps']['geolocation_passed'] = $passed;
-        $session['gps'] = [
-            'passed' => $passed,
-            'distance_meters' => round($distanceMeters, 2),
-            'allowed_distance_meters' => $allowedDistanceMeters,
+        $session['gps'] = array_merge($geo, [
             'submitted_latitude' => $submittedLatitude,
             'submitted_longitude' => $submittedLongitude,
             'verified_at' => now()->toIso8601String(),
-        ];
+        ]);
         $session['updated_at'] = now()->toIso8601String();
         $this->saveSession($token, $session);
 
@@ -155,7 +195,11 @@ class LandVerificationController extends Controller
             ], 422);
         }
 
-        return $this->success(__('api.land_verification.gps_verification_passed'), [
+        $message = $verificationMode === 'verified_on_site'
+            ? __('api.land_verification.gps_verification_on_site')
+            : __('api.land_verification.gps_verification_remote');
+
+        return $this->success($message, [
             'gps_check' => $session['gps'],
             'next_step' => __('api.land_verification.next_steps.submit_nin'),
         ]);
@@ -165,7 +209,7 @@ class LandVerificationController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'verification_token' => ['required', 'string'],
-            'nin' => ['required', 'string', 'size:20'],
+            'nin' => ['required', 'string', 'size:20', 'regex:/^\d{8}-\d{5}-\d{5}$/'],
         ]);
 
         if ($validator->fails()) {
@@ -233,7 +277,8 @@ class LandVerificationController extends Controller
     public function verifyNinAnswers(
         Request $request,
         RiskScoringService $riskScoringService,
-        GeminiLandAdvisoryService $geminiLandAdvisoryService
+        GeminiLandAdvisoryService $geminiLandAdvisoryService,
+        CertificateService $certificateService
     ): JsonResponse
     {
         $validator = Validator::make($request->all(), [
@@ -252,6 +297,12 @@ class LandVerificationController extends Controller
 
         $validated = $validator->validated();
         $token = $validated['verification_token'];
+        $user = $request->user();
+
+        if (! $user) {
+            return $this->error(__('api.land_verification.unauthenticated'), [], 401);
+        }
+
         $session = $this->getSession($token);
 
         if (! $session) {
@@ -315,18 +366,17 @@ class LandVerificationController extends Controller
         $session['updated_at'] = now()->toIso8601String();
         $this->saveSession($token, $session);
 
-        if (! $questionsPassed) {
-            $remainingAttempts = max(0, ($identity['max_attempts'] ?? self::MAX_CHALLENGE_ATTEMPTS) - $identity['attempts']);
+        $remainingAttempts = max(0, ($identity['max_attempts'] ?? self::MAX_CHALLENGE_ATTEMPTS) - $identity['attempts']);
 
-            return $this->error(__('api.land_verification.identity_challenge_failed'), [
-                'result' => [
-                    'passed' => false,
-                    'correct_count' => $correctCount,
-                    'total_questions' => count($expected),
-                    'remaining_attempts' => $remainingAttempts,
-                ],
-            ], 422);
-        }
+        VerificationAttemptLog::logAttempt(
+            $session['user_id'] ?? null,
+            $token,
+            $validated['challenge_id'] ?? null,
+            'nin_challenge',
+            $questionsPassed,
+            $correctCount,
+            count($expected),
+        );
 
         $plot = Plot::query()->find($session['plot_id']);
 
@@ -335,129 +385,37 @@ class LandVerificationController extends Controller
         }
 
         $nin = $identity['nin'];
-        $ownerMatch = $plot->owner_nida === $nin;
+        $ownerMatch = false;
+        $historyOwnerMatch = false;
+        $ownerLinkPassed = false;
 
-        $latestTransfer = PlotOwnershipHistory::query()
-            ->where('plot_id', $plot->id)
-            ->orderByDesc('transfer_date')
-            ->orderByDesc('id')
-            ->first();
+        if ($questionsPassed) {
+            // Owner registry match is informational only — verification is not
+            // blocked by linking a specific NIN to a specific plot.
+            $ownerMatch = $plot->owner_nida !== null && $plot->owner_nida === $nin;
 
-        $historyOwnerMatch = $latestTransfer ? $latestTransfer->to_nida === $nin : true;
-        $ownerLinkPassed = $ownerMatch && $historyOwnerMatch;
+            $latestTransfer = PlotOwnershipHistory::query()
+                ->where('plot_id', $plot->id)
+                ->orderByDesc('transfer_date')
+                ->orderByDesc('id')
+                ->first();
 
-        $session['steps']['owner_link_passed'] = $ownerLinkPassed;
-        $session['updated_at'] = now()->toIso8601String();
-        $this->saveSession($token, $session);
+            $historyOwnerMatch = $latestTransfer ? $latestTransfer->to_nida === $nin : true;
+            $ownerLinkPassed = $ownerMatch && $historyOwnerMatch;
 
-        if (! $ownerLinkPassed) {
-            $forcedRiskScore = (int) config('land_verification.risk.owner_link_forced_score', 95);
-            $ownerLinkReasons = [
-                __('api.land_verification.assessment.owner_link.reasons.owner_mismatch'),
-            ];
-
-            if (! $historyOwnerMatch) {
-                $ownerLinkReasons[] = __('api.land_verification.assessment.owner_link.reasons.history_mismatch');
-            }
-
-            $ownerLinkRecommendation = __('api.land_verification.assessment.owner_link.recommendation');
-            $ownerLinkVerificationLogId = null;
-
-            $userId = $session['user_id'] ?? null;
-            if ($userId !== null) {
-                $ownerLinkVerificationLog = VerificationLog::query()->create([
-                    'user_id' => $userId,
-                    'plot_id' => $plot->id,
-                    'geolocation_passed' => (bool) ($session['steps']['geolocation_passed'] ?? false),
-                    'nida_passed' => true,
-                    'certificate_passed' => false,
-                    'submitted_latitude' => $session['gps']['submitted_latitude'] ?? null,
-                    'submitted_longitude' => $session['gps']['submitted_longitude'] ?? null,
-                    'ai_verdict' => 'DO_NOT_BUY',
-                    'risk_score' => $forcedRiskScore,
-                    'ai_reasons' => $this->formatReasonsText($ownerLinkReasons),
-                    'ai_recommendation' => $ownerLinkRecommendation,
-                    'ai_payload' => [
-                        'version' => 'risk-v1',
-                        'plot_reference' => $plot->plot_reference,
-                        'verification_context' => [
-                            'gps_passed' => (bool) ($session['steps']['geolocation_passed'] ?? false),
-                            'nida_passed' => true,
-                            'owner_link_passed' => false,
-                        ],
-                        'steps' => [
-                            'plot_found' => true,
-                            'gps' => $session['gps'] ?? [],
-                            'nin_found' => (bool) ($session['steps']['nin_found'] ?? false),
-                            'questions_passed' => true,
-                            'question_fields_used' => array_values($identity['selected_fields'] ?? []),
-                            'owner_link' => [
-                                'plot_owner_match' => $ownerMatch,
-                                'history_owner_match' => $historyOwnerMatch,
-                            ],
-                        ],
-                        'risk_engine' => [
-                            'score' => $forcedRiskScore,
-                            'verdict' => 'DO_NOT_BUY',
-                            'verdict_label' => $this->verdictLabel('DO_NOT_BUY'),
-                            'factors' => [
-                                [
-                                    'name' => 'owner_linkage_failure',
-                                    'points' => $forcedRiskScore,
-                                    'detail' => __('api.land_verification.assessment.owner_link.reasons.owner_mismatch'),
-                                ],
-                            ],
-                            'interaction_penalties' => [],
-                            'uncertainty_penalty' => 0,
-                            'reasons' => $ownerLinkReasons,
-                        ],
-                        'gemini' => [
-                            'model' => (string) config('services.gemini.model', 'gemini-2.0-flash'),
-                            'prompt_version' => 'v1',
-                            'parsed_ok' => false,
-                            'fallback_used' => true,
-                            'target_language' => app()->getLocale(),
-                            'validation_errors' => ['Owner linkage failed before AI advisory call.'],
-                            'raw_response' => null,
-                        ],
-                    ],
-                    'status' => 'Failed',
-                ]);
-
-                $ownerLinkVerificationLogId = (int) $ownerLinkVerificationLog->id;
-            }
-
-            Cache::forget($this->sessionKey($token));
-
-            return $this->error(__('api.land_verification.owner_linkage_failed'), [
-                'verification_log_id' => $ownerLinkVerificationLogId,
-                'owner_link' => [
-                    'passed' => false,
-                    'plot_owner_match' => $ownerMatch,
-                    'history_owner_match' => $historyOwnerMatch,
-                ],
-                'assessment' => [
-                    'verdict' => 'DO_NOT_BUY',
-                    'verdict_label' => $this->verdictLabel('DO_NOT_BUY'),
-                    'risk_score' => $forcedRiskScore,
-                    'reasons' => $ownerLinkReasons,
-                    'recommendation' => $ownerLinkRecommendation,
-                ],
-            ], 403);
+            $session['steps']['owner_link_passed'] = $ownerLinkPassed;
+            $session['submitted_nin'] = $nin;
+            $session['updated_at'] = now()->toIso8601String();
+            $this->saveSession($token, $session);
         }
 
-        $userId = $session['user_id'] ?? null;
-
-        if ($userId === null) {
-            return $this->error(__('api.land_verification.missing_user_id'), [], 422);
-        }
-
+        // Continue to full risk scoring + certificate even when NIN ≠ plot owner.
         $nida = Nida::query()->where('nin', $nin)->first();
         $riskAssessment = $riskScoringService->score($plot);
         $verificationContext = [
             'gps_passed' => (bool) ($session['steps']['geolocation_passed'] ?? false),
-            'nida_passed' => true,
-            'owner_link_passed' => true,
+            'nida_passed' => $questionsPassed,
+            'owner_link_passed' => $ownerLinkPassed,
         ];
         $landData = $plot->getAiPayload();
         $aiAdvisory = $geminiLandAdvisoryService->advise([
@@ -474,30 +432,48 @@ class LandVerificationController extends Controller
             'verification_context' => $verificationContext,
         ]);
 
+        // Always keep verdict aligned with the system risk engine score.
+        $finalVerdict = $riskAssessment['verdict'];
+        $finalRiskScore = (int) $riskAssessment['score'];
+        $aiAdvisory['verdict'] = $finalVerdict;
+        $aiAdvisory['risk_score'] = $finalRiskScore;
+
+        $logStatus = 'Completed';
+
+        if (! $questionsPassed) {
+            $finalVerdict = 'DO_NOT_BUY';
+            $cautionMax = (int) config('land_verification.risk.thresholds.caution_max', 69);
+            $finalRiskScore = max($finalRiskScore, $cautionMax + 1);
+            $aiAdvisory['verdict'] = $finalVerdict;
+            $aiAdvisory['risk_score'] = $finalRiskScore;
+        }
+
         $verificationLog = VerificationLog::query()->create([
-            'user_id' => $userId,
+            'user_id' => $user->id,
             'plot_id' => $plot->id,
             'geolocation_passed' => (bool) ($session['steps']['geolocation_passed'] ?? false),
-            'nida_passed' => true,
-            'certificate_passed' => true,
+            'nida_passed' => $questionsPassed,
+            'certificate_passed' => $questionsPassed,
             'submitted_latitude' => $session['gps']['submitted_latitude'] ?? null,
             'submitted_longitude' => $session['gps']['submitted_longitude'] ?? null,
-            'ai_verdict' => $aiAdvisory['verdict'],
+            'ai_verdict' => $finalVerdict,
             'risk_score' => $aiAdvisory['risk_score'],
             'ai_reasons' => $this->formatReasonsText($aiAdvisory['reasons']),
             'ai_recommendation' => $aiAdvisory['recommendation'],
             'ai_payload' => [
                 'version' => 'risk-v1',
                 'plot_reference' => $plot->plot_reference,
+                'submitted_nin' => $nin,
                 'steps' => [
                     'plot_found' => true,
                     'gps' => $session['gps'] ?? [],
                     'nin_found' => (bool) ($session['steps']['nin_found'] ?? false),
-                    'questions_passed' => true,
+                    'questions_passed' => $questionsPassed,
                     'question_fields_used' => array_values($identity['selected_fields'] ?? []),
                     'owner_link' => [
                         'plot_owner_match' => $ownerMatch,
                         'history_owner_match' => $historyOwnerMatch,
+                        'hard_gate' => false,
                     ],
                 ],
                 'verification_context' => $verificationContext,
@@ -513,33 +489,119 @@ class LandVerificationController extends Controller
                 'gemini' => $aiAdvisory['gemini'] ?? [],
                 'land_data' => $landData,
             ],
-            'status' => 'Completed',
+            'status' => $logStatus,
         ]);
 
         Cache::forget($this->sessionKey($token));
 
+        VerificationCompleted::dispatch($user, $verificationLog, $plot);
+
+        $riskAlertThreshold = (int) config('notifications.risk_alert_threshold', 30);
+        if ($verificationLog->risk_score >= $riskAlertThreshold) {
+            RiskScoreAlert::dispatch($user, $verificationLog, $plot, $verificationLog->risk_score, $verificationLog->ai_verdict);
+        }
+
+        $certificate = null;
+        $certificateError = null;
+        $verificationMode = $session['verification_mode'] ?? 'buyer_verification';
+        $isSellerMode = $verificationMode === 'seller_ownership';
+
+        $eligibleForCertificate = $questionsPassed && (
+            $isSellerMode
+                ? $ownerLinkPassed && in_array($verificationLog->ai_verdict, ['SAFE', 'CAUTION'], true)
+                : in_array($verificationLog->ai_verdict, ['SAFE', 'CAUTION'], true)
+        );
+
+        if ($eligibleForCertificate) {
+            try {
+                $certificate = \App\Models\VerificationCertificate::query()
+                    ->where('verification_log_id', $verificationLog->id)
+                    ->first();
+
+                $certType = $isSellerMode
+                    ? CertificateService::TYPE_SELLER
+                    : CertificateService::TYPE_BUYER;
+
+                if (! $certificate) {
+                    $certificate = $certificateService->generateCertificate(
+                        $user,
+                        $verificationLog,
+                        $plot,
+                        $certType
+                    );
+                }
+
+                try {
+                    if (! $certificate->pdf_path || ! \Illuminate\Support\Facades\Storage::disk('local')->exists($certificate->pdf_path)) {
+                        $certificateService->generatePdf($certificate);
+                        $certificate->refresh();
+                    }
+                } catch (\Throwable $pdfError) {
+                    $certificateError = 'PDF fingerprint document failed: '.$pdfError->getMessage();
+                    \Illuminate\Support\Facades\Log::error('Certificate PDF generation failed', [
+                        'verification_log_id' => $verificationLog->id,
+                        'certificate_id' => $certificate->id,
+                        'error' => $pdfError->getMessage(),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $certificateError = $e->getMessage();
+                \Illuminate\Support\Facades\Log::error('Certificate generation failed', [
+                    'verification_log_id' => $verificationLog->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $fingerprint = null;
+        if ($certificate) {
+            try {
+                $fingerprint = $certificateService->digitalSignatureService->getPublicKeyFingerprint();
+            } catch (\Throwable) {
+                $fingerprint = null;
+            }
+        }
+
         return $this->success(__('api.land_verification.verification_completed'), [
             'verification_log_id' => $verificationLog->id,
+            'verification_mode' => $verificationMode,
             'plot_reference' => $plot->plot_reference,
-            'identity' => [
+            'identity' => $questionsPassed ? [
                 'full_name' => $nida?->full_name,
                 'gender' => $nida?->gender,
                 'nin_masked' => $this->maskNin($nin),
+                'nin' => $nin,
                 'passport_image_url' => $this->passportImageUrl($nida),
-            ],
+            ] : null,
             'steps' => [
                 'plot_found' => true,
-                'gps_passed' => true,
-                'nida_questions_passed' => true,
-                'owner_link_passed' => true,
+                'gps_passed' => (bool) ($session['steps']['geolocation_passed'] ?? false),
+                'nida_questions_passed' => $questionsPassed,
+                'owner_link_passed' => $ownerLinkPassed,
             ],
             'assessment' => [
-                'verdict' => $aiAdvisory['verdict'],
-                'verdict_label' => $this->verdictLabel($aiAdvisory['verdict']),
+                'verdict' => $finalVerdict,
+                'verdict_label' => $this->verdictLabel($finalVerdict),
                 'risk_score' => $aiAdvisory['risk_score'],
                 'reasons' => $aiAdvisory['reasons'],
                 'recommendation' => $aiAdvisory['recommendation'],
             ],
+            'remaining_attempts' => $remainingAttempts,
+            'certificate_eligible' => $eligibleForCertificate,
+            'certificate_error' => $certificateError,
+            'certificate' => $certificate ? [
+                'id' => $certificate->id,
+                'certificate_number' => $certificate->certificate_number,
+                'certificate_type' => $certificate->certificate_type
+                    ?? ($certificate->certificate_data['certificate_type'] ?? 'buyer_verification'),
+                'certificate_title' => $certificate->certificate_data['certificate_title'] ?? null,
+                'issued_at' => $certificate->issued_at?->toIso8601String(),
+                'verdict' => $certificate->certificate_data['verdict'] ?? $verificationLog->ai_verdict,
+                'risk_score' => $certificate->certificate_data['risk_score'] ?? $verificationLog->risk_score,
+                'download_available' => ! empty($certificate->pdf_path),
+                'fingerprint' => $fingerprint,
+                'pdf_content_hash' => $certificate->pdf_content_hash,
+            ] : null,
         ]);
     }
 
@@ -650,11 +712,18 @@ class LandVerificationController extends Controller
 
         foreach ([$motherField, $fatherField, $locationField] as $selected) {
             $questionId = 'q_'.Str::lower(Str::random(12));
-            $questions[] = [
+            $question = [
                 'question_id' => $questionId,
                 'prompt' => $this->questionPrompt($selected['field']),
                 'type' => 'text',
+                'field' => $selected['field'],
             ];
+
+            if (config('land_verification.demo_hints', true)) {
+                $question['demo_answer'] = (string) $selected['value'];
+            }
+
+            $questions[] = $question;
 
             $expected[$questionId] = [
                 'field' => $selected['field'],

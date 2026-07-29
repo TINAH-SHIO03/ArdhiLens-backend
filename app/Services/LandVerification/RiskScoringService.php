@@ -187,6 +187,17 @@ class RiskScoringService
             );
         }
 
+        $docAssessment = $this->assessDocumentRisk($plot);
+        foreach ($docAssessment['factors'] as $factor) {
+            $this->addFactor(
+                $factors,
+                $score,
+                $factor['name'],
+                $factor['points'],
+                $factor['detail']
+            );
+        }
+
         $uncertaintyPenalty = $this->calculateUncertaintyPenalty($plot);
         if ($uncertaintyPenalty > 0) {
             $score += $uncertaintyPenalty;
@@ -209,6 +220,44 @@ class RiskScoringService
             'interaction_penalties' => $interactionPenalties,
             'uncertainty_penalty' => $uncertaintyPenalty,
         ];
+    }
+
+    private function assessDocumentRisk(Plot $plot): array
+    {
+        $documents = \App\Models\Document::query()
+            ->where('plot_id', $plot->id)
+            ->get();
+
+        $factors = [];
+        if ($documents->isEmpty()) {
+            $factors[] = [
+                'name' => 'missing_supporting_documents',
+                'points' => (int) config('land_verification.risk.missing_docs_penalty', 8),
+                'detail' => 'No supporting land documents linked to this plot yet.',
+            ];
+
+            return ['factors' => $factors];
+        }
+
+        $flagged = $documents->where('review_status', 'flagged')->count();
+        if ($flagged > 0) {
+            $factors[] = [
+                'name' => 'flagged_documents',
+                'points' => (int) config('land_verification.risk.flagged_docs_penalty', 12),
+                'detail' => "{$flagged} document(s) flagged by authenticity checks pending admin review.",
+            ];
+        }
+
+        $pending = $documents->whereIn('review_status', ['pending', 'needs_manual_review'])->count();
+        if ($pending > 0) {
+            $factors[] = [
+                'name' => 'pending_document_review',
+                'points' => 4,
+                'detail' => "{$pending} document(s) awaiting admin authenticity review.",
+            ];
+        }
+
+        return ['factors' => $factors];
     }
 
     private function assessLandRates(Plot $plot): array
