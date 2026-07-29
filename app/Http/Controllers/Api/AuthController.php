@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
@@ -194,6 +195,65 @@ class AuthController extends Controller
         return $this->success(__('api.auth.profile_updated'), [
             'user' => $this->userPayload($user->fresh()),
         ]);
+    }
+
+    public function uploadAvatar(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user) {
+            return $this->error(__('api.auth.unauthenticated'), [], 401);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'avatar' => ['required', 'file', 'max:4096', 'mimes:jpg,jpeg,png,webp,heic,heif'],
+        ]);
+
+        if ($validator->fails()) {
+            return $this->error(__('api.auth.validation_failed'), [
+                'validation' => $validator->errors()->toArray(),
+            ], 422);
+        }
+
+        $file = $request->file('avatar');
+        if ($file === null) {
+            return $this->error('No image file received.', [], 422);
+        }
+
+        if ($user->avatar_path && Storage::disk('local')->exists($user->avatar_path)) {
+            Storage::disk('local')->delete($user->avatar_path);
+        }
+
+        $extension = strtolower((string) $file->getClientOriginalExtension());
+        if ($extension === '' || $extension === 'jpeg') {
+            $extension = 'jpg';
+        }
+
+        $path = $file->storeAs(
+            'avatars',
+            $user->id.'_'.time().'.'.$extension,
+            'local'
+        );
+
+        $user->update(['avatar_path' => $path]);
+        $this->auditLogService->log('auth.avatar_upload', $user, 'user', $user->id, [], $request);
+
+        return $this->success('Profile photo updated.', [
+            'user' => $this->userPayload($user->fresh()),
+        ]);
+    }
+
+    public function avatar(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
+    {
+        $user = $request->user();
+        if (! $user) {
+            return $this->error(__('api.auth.unauthenticated'), [], 401);
+        }
+
+        if (! $user->avatar_path || ! Storage::disk('local')->exists($user->avatar_path)) {
+            return $this->error('No profile photo.', [], 404);
+        }
+
+        return Storage::disk('local')->response($user->avatar_path);
     }
 
     public function sendEmailVerification(Request $request): JsonResponse
@@ -389,6 +449,7 @@ class AuthController extends Controller
             'nin' => $user->nin,
             'role' => $user->role,
             'phone_number' => $user->phone_number,
+            'has_avatar' => filled($user->avatar_path),
             'is_active' => (bool) $user->is_active,
             'email_verified' => $user->email_verified_at !== null,
             'email_verified_at' => $user->email_verified_at?->toIso8601String(),

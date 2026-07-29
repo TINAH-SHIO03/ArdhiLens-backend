@@ -18,6 +18,7 @@ class User extends Authenticatable
         'nin',
         'role',
         'phone_number',
+        'avatar_path',
         'is_active',
         'verified_at',
         'email_verified_at',

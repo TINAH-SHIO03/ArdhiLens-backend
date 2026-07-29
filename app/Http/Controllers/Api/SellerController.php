@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Document;
 use App\Models\Plot;
 use App\Models\PurchaseInterest;
 use App\Models\User;
@@ -23,6 +22,10 @@ class SellerController extends Controller
         private readonly AuditLogService $auditLogService,
     ) {}
 
+    /**
+     * Lightweight first paint for seller home.
+     * Heavy sections (buyer interests, recent checks, documents) load via separate APIs.
+     */
     public function dashboard(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -30,47 +33,15 @@ class SellerController extends Controller
             return $this->error('Seller access only.', [], 403);
         }
 
-        $plots = Plot::query()
-            ->when($user->nin, fn ($q) => $q->where('owner_nida', $user->nin))
-            ->orderByDesc('updated_at')
-            ->limit(20)
-            ->get();
+        $plots = $user->nin
+            ? Plot::query()
+                ->where('owner_nida', $user->nin)
+                ->orderByDesc('updated_at')
+                ->limit(20)
+                ->get()
+            : collect();
 
         $plotIds = $plots->pluck('id');
-
-        $buyerInterests = PurchaseInterest::query()
-            ->with(['buyer', 'plot'])
-            ->where(function ($q) use ($user, $plotIds) {
-                $q->where('seller_id', $user->id);
-                if ($plotIds->isNotEmpty()) {
-                    $q->orWhereIn('plot_id', $plotIds);
-                }
-            })
-            ->orderByDesc('updated_at')
-            ->limit(30)
-            ->get()
-            ->map(function (PurchaseInterest $interest) use ($user) {
-                if (! $interest->seller_id) {
-                    $interest->update(['seller_id' => $user->id]);
-                }
-
-                return [
-                    'id' => $interest->id,
-                    'status' => $interest->status,
-                    'status_label' => $this->interestStatusLabel($interest->status, 'seller'),
-                    'action_required' => $interest->status === PurchaseInterest::STATUS_PENDING,
-                    'plot_reference' => $interest->plot_reference,
-                    'buyer_message' => $interest->buyer_message,
-                    'seller_reply' => $interest->seller_reply,
-                    'created_at' => $interest->created_at?->toIso8601String(),
-                    'buyer' => $interest->buyer ? [
-                        'id' => $interest->buyer->id,
-                        'name' => $interest->buyer->name,
-                        'email' => $interest->buyer->email,
-                        'phone_number' => $interest->buyer->phone_number,
-                    ] : null,
-                ];
-            });
 
         $plotLinkStatus = 'no_nin';
         $plotLinkMessage = 'Enter the NIN registered as owner of your land to link plots.';
@@ -83,6 +54,56 @@ class SellerController extends Controller
                 $plotLinkMessage = $plots->count().' plot(s) linked to your NIN.';
             }
         }
+
+        $pendingInterestCount = PurchaseInterest::query()
+            ->where('status', PurchaseInterest::STATUS_PENDING)
+            ->where(function ($q) use ($user, $plotIds) {
+                $q->where('seller_id', $user->id);
+                if ($plotIds->isNotEmpty()) {
+                    $q->orWhere(function ($owned) use ($plotIds) {
+                        $owned->whereNull('seller_id')->whereIn('plot_id', $plotIds);
+                    });
+                }
+            })
+            ->count();
+
+        return $this->success('Seller summary loaded.', [
+            'kyc_status' => $user->kyc_status ?? 'none',
+            'nin' => $user->nin,
+            'plot_link_status' => $plotLinkStatus,
+            'plot_link_message' => $plotLinkMessage,
+            'linked_plot_count' => $plots->count(),
+            'plots' => $plots->map(fn (Plot $plot) => [
+                'id' => $plot->id,
+                'plot_reference' => $plot->plot_reference,
+                'region' => $plot->region,
+                'district' => $plot->district,
+                'ward' => $plot->ward,
+                'status' => $plot->status,
+                'size_hectares' => $plot->size_hectares,
+                'has_boundary' => ! empty($plot->boundary_geojson),
+            ]),
+            'pending_interest_count' => $pendingInterestCount,
+            'alerts_unread' => $user->unreadNotificationsCount(),
+        ]);
+    }
+
+    public function recentVerifications(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user || ! $user->isSeller()) {
+            return $this->error('Seller access only.', [], 403);
+        }
+
+        if (! $user->nin) {
+            return $this->success('Recent buyer verifications loaded.', [
+                'recent_buyer_verifications' => [],
+            ]);
+        }
+
+        $plotIds = Plot::query()
+            ->where('owner_nida', $user->nin)
+            ->pluck('id');
 
         $recentVerifications = $plotIds->isEmpty()
             ? collect()
@@ -102,41 +123,8 @@ class SellerController extends Controller
                     'created_at' => $log->created_at?->toIso8601String(),
                 ]);
 
-        $ownershipDocs = Document::query()
-            ->where('user_id', $user->id)
-            ->orderByDesc('created_at')
-            ->limit(10)
-            ->get()
-            ->map(fn (Document $doc) => [
-                'id' => $doc->id,
-                'document_type' => $doc->document_type,
-                'original_name' => $doc->original_name,
-                'review_status' => $doc->review_status,
-                'authenticity_score' => $doc->authenticity_score,
-                'plot_id' => $doc->plot_id,
-            ]);
-
-        return $this->success('Seller dashboard loaded.', [
-            'kyc_status' => $user->kyc_status ?? 'none',
-            'nin' => $user->nin,
-            'plot_link_status' => $plotLinkStatus,
-            'plot_link_message' => $plotLinkMessage,
-            'linked_plot_count' => $plots->count(),
-            'plots' => $plots->map(fn (Plot $plot) => [
-                'id' => $plot->id,
-                'plot_reference' => $plot->plot_reference,
-                'region' => $plot->region,
-                'district' => $plot->district,
-                'ward' => $plot->ward,
-                'status' => $plot->status,
-                'size_hectares' => $plot->size_hectares,
-                'has_boundary' => ! empty($plot->boundary_geojson),
-            ]),
-            'buyer_interests' => $buyerInterests,
-            'pending_interest_count' => $buyerInterests->where('status', PurchaseInterest::STATUS_PENDING)->count(),
+        return $this->success('Recent buyer verifications loaded.', [
             'recent_buyer_verifications' => $recentVerifications,
-            'ownership_documents' => $ownershipDocs,
-            'alerts_unread' => $user->unreadNotificationsCount(),
         ]);
     }
 
@@ -158,10 +146,23 @@ class SellerController extends Controller
             ], 422);
         }
 
-        $nin = $request->input('nin');
+        $nin = trim((string) $request->input('nin'));
         $identity = $this->nidaProvider->lookup($nin);
         if (! $identity) {
             return $this->error('NIDA record not found for this NIN.', [], 404);
+        }
+
+        $ninTaken = User::query()
+            ->where('role', 'seller')
+            ->where('nin', $nin)
+            ->where('id', '!=', $user->id)
+            ->exists();
+        if ($ninTaken) {
+            return $this->error(
+                'This NIN is already linked to another seller account. Use your own NIN.',
+                [],
+                409
+            );
         }
 
         $face = $this->faceMatchService->compare(
@@ -226,33 +227,11 @@ class SellerController extends Controller
             return;
         }
 
+        // Only claim unassigned interests — never steal another seller's requests.
         PurchaseInterest::query()
             ->whereIn('plot_id', $plotIds)
-            ->where(function ($q) use ($user) {
-                $q->whereNull('seller_id')->orWhere('seller_id', '!=', $user->id);
-            })
+            ->whereNull('seller_id')
             ->update(['seller_id' => $user->id]);
-    }
-
-    private function interestStatusLabel(string $status, string $role): string
-    {
-        if ($role === 'seller') {
-            return match ($status) {
-                PurchaseInterest::STATUS_PENDING => 'Action required — respond to buyer',
-                PurchaseInterest::STATUS_ACCEPTED => 'You accepted this buyer',
-                PurchaseInterest::STATUS_DECLINED => 'You declined this buyer',
-                PurchaseInterest::STATUS_CONTACTED => 'You contacted this buyer',
-                default => ucfirst($status),
-            };
-        }
-
-        return match ($status) {
-            PurchaseInterest::STATUS_PENDING => 'Sent — waiting for seller to respond',
-            PurchaseInterest::STATUS_ACCEPTED => 'Seller accepted your interest',
-            PurchaseInterest::STATUS_DECLINED => 'Seller declined your interest',
-            PurchaseInterest::STATUS_CONTACTED => 'Seller contacted you',
-            default => ucfirst($status),
-        };
     }
 
     private function success(string $message, array $data = [], int $status = 200): JsonResponse

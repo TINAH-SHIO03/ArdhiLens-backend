@@ -21,6 +21,8 @@ Route::prefix('auth')->middleware(['auth:sanctum', 'throttle:api'])->group(funct
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
     Route::put('/profile', [AuthController::class, 'updateProfile']);
+    Route::post('/avatar', [AuthController::class, 'uploadAvatar']);
+    Route::get('/avatar', [AuthController::class, 'avatar']);
     Route::post('/email/send-code', [AuthController::class, 'sendEmailVerification']);
     Route::post('/email/verify', [AuthController::class, 'verifyEmail']);
 });
@@ -39,6 +41,7 @@ Route::prefix('land-verification')->middleware(['auth:sanctum', 'throttle:api'])
 
 Route::prefix('seller')->middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::get('/dashboard', [SellerController::class, 'dashboard']);
+    Route::get('/recent-verifications', [SellerController::class, 'recentVerifications']);
     Route::post('/kyc', [SellerController::class, 'submitKyc']);
     Route::get('/interests', [PurchaseInterestController::class, 'forSeller']);
     Route::put('/interests/{id}/respond', [PurchaseInterestController::class, 'respond']);

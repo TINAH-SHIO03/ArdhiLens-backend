@@ -1,0 +1,13 @@
+# Production: attach app to Caddy proxy network (no host port — Caddy owns 80/443).
+services:
+  app:
+    container_name: ardhilens-app
+    ports: !reset []
+    networks:
+      - ardhilens
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: automated-data-collection-and-validation-pipeline-_default

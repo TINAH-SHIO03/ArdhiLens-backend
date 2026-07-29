@@ -126,20 +126,37 @@ class PurchaseInterestController extends Controller
             return $this->error('Seller access only.', [], 403);
         }
 
+        $plotIds = $user->nin
+            ? Plot::query()->where('owner_nida', $user->nin)->pluck('id')
+            : collect();
+
         $items = PurchaseInterest::query()
             ->with(['buyer', 'plot'])
-            ->where(function ($q) use ($user) {
+            ->where(function ($q) use ($user, $plotIds) {
                 $q->where('seller_id', $user->id);
-                if ($user->nin) {
-                    $q->orWhereHas('plot', fn ($pq) => $pq->where('owner_nida', $user->nin));
+                if ($plotIds->isNotEmpty()) {
+                    $q->orWhere(function ($owned) use ($plotIds) {
+                        $owned->whereNull('seller_id')->whereIn('plot_id', $plotIds);
+                    });
                 }
             })
             ->orderByDesc('updated_at')
+            ->limit(30)
             ->get()
-            ->map(fn (PurchaseInterest $interest) => $this->payload($interest));
+            ->map(function (PurchaseInterest $interest) use ($user, $plotIds) {
+                if (
+                    ! $interest->seller_id
+                    && $plotIds->contains((int) $interest->plot_id)
+                ) {
+                    $interest->update(['seller_id' => $user->id]);
+                }
+
+                return $this->payload($interest->fresh(['buyer', 'seller', 'plot']));
+            });
 
         return $this->success('Seller buyer requests loaded.', [
             'interests' => $items,
+            'pending_interest_count' => $items->where('status', PurchaseInterest::STATUS_PENDING)->count(),
         ]);
     }
 

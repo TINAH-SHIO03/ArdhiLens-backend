@@ -98,17 +98,20 @@
                     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px; border:1px solid #e0e0e0; border-radius:3px;">
                         <tr>
                             @php
+                                $isBuyerCert = ($data['certificate_type'] ?? '') === 'buyer_verification';
                                 $checks = [
                                     'GPS' => $data['geolocation_passed'] ?? false,
                                     'NIDA' => $data['nida_passed'] ?? false,
                                     'CERT' => $data['certificate_passed'] ?? false,
-                                    'OWNER' => $data['owner_link_passed'] ?? false,
+                                    'OWNER' => $isBuyerCert ? null : ($data['owner_link_passed'] ?? false),
                                 ];
                             @endphp
                             @foreach($checks as $label => $passed)
                                 <td width="25%" align="center" style="padding:6px 4px; background:#f7f9fc; {{ !$loop->last ? 'border-right:1px solid #e0e0e0;' : '' }}">
                                     <span style="font-size:8px; color:#888;">{{ $label }}</span><br>
-                                    @if($passed)
+                                    @if($passed === null)
+                                        <span style="font-size:9px; font-weight:bold; color:#64748b;">N/A</span>
+                                    @elseif($passed)
                                         <span style="font-size:9px; font-weight:bold; color:#16a34a;">PASS</span>
                                     @else
                                         <span style="font-size:9px; font-weight:bold; color:#dc2626;">FAIL</span>

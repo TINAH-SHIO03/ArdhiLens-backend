@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Document;
+use App\Models\Plot;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -18,44 +19,95 @@ class DocumentController extends Controller
             return $this->error(__('api.documents.unauthenticated'), [], 401);
         }
 
-        $query = $user->documents();
+        // Buyer: view seller documents for a specific plot (read-only diligence).
+        if ($user->isBuyer()) {
+            $plotReference = trim((string) $request->query('plot_reference', ''));
+            $plotId = $request->query('plot_id');
 
-        if ($request->has('document_type')) {
+            if ($plotReference === '' && empty($plotId)) {
+                return $this->success(__('api.documents.list_fetched'), [
+                    'documents' => [],
+                    'mode' => 'buyer_view',
+                    'hint' => 'Provide plot_reference to view seller documents for that plot.',
+                ]);
+            }
+
+            $plot = $this->resolvePlot($plotId, $plotReference);
+            if (! $plot) {
+                return $this->error(__('api.land_verification.plot_not_found'), [], 404);
+            }
+
+            $documents = Document::query()
+                ->with('plot')
+                ->where('plot_id', $plot->id)
+                ->when(
+                    $request->filled('document_type'),
+                    fn ($q) => $q->byType($request->input('document_type'))
+                )
+                ->orderByDesc('created_at')
+                ->get()
+                ->map(fn (Document $doc) => $this->documentPayload($doc));
+
+            return $this->success(__('api.documents.list_fetched'), [
+                'documents' => $documents,
+                'mode' => 'buyer_view',
+                'plot' => [
+                    'id' => $plot->id,
+                    'plot_reference' => $plot->plot_reference,
+                    'region' => $plot->region,
+                    'district' => $plot->district,
+                    'ward' => $plot->ward,
+                ],
+            ]);
+        }
+
+        // Seller (or admin): own uploads, optionally filtered by plot.
+        $query = Document::query()
+            ->with('plot')
+            ->where('user_id', $user->id);
+
+        if ($request->filled('document_type')) {
             $query->byType($request->input('document_type'));
         }
 
-        if ($request->has('plot_id')) {
+        if ($request->filled('plot_id')) {
             $query->forPlot((int) $request->input('plot_id'));
         }
 
-        $documents = $query->orderByDesc('created_at')->get()->map(function ($doc) {
-            return [
-                'id' => $doc->id,
-                'document_type' => $doc->document_type,
-                'original_name' => $doc->original_name,
-                'mime_type' => $doc->mime_type,
-                'size' => $doc->size,
-                'size_formatted' => $doc->sizeFormatted(),
-                'notes' => $doc->notes,
-                'plot_id' => $doc->plot_id,
-                'review_status' => $doc->review_status,
-                'authenticity_score' => $doc->authenticity_score,
-                'authenticity_notes' => $doc->authenticity_notes,
-                'created_at' => $doc->created_at->toIso8601String(),
-            ];
-        });
+        if ($request->filled('plot_reference')) {
+            $plot = Plot::query()
+                ->whereRaw('LOWER(plot_reference) = ?', [strtolower((string) $request->input('plot_reference'))])
+                ->first();
+            if ($plot) {
+                $query->forPlot($plot->id);
+            }
+        }
+
+        $documents = $query->orderByDesc('created_at')->get()
+            ->map(fn (Document $doc) => $this->documentPayload($doc));
 
         return $this->success(__('api.documents.list_fetched'), [
             'documents' => $documents,
+            'mode' => 'seller_manage',
         ]);
     }
 
     public function upload(Request $request): JsonResponse
     {
+        $user = $request->user();
+
+        if (! $user) {
+            return $this->error(__('api.documents.unauthenticated'), [], 401);
+        }
+
+        if (! $user->isSeller()) {
+            return $this->error('Only sellers can upload plot documents.', [], 403);
+        }
+
         $validator = \Validator::make($request->all(), [
             'file' => ['required', 'file', 'max:10240'],
             'document_type' => ['required', 'string', 'in:sale_agreement,transfer_form,certificate_of_occupancy,survey_plan,identification,other'],
-            'plot_id' => ['nullable', 'integer', 'exists:plots,id'],
+            'plot_id' => ['required', 'integer', 'exists:plots,id'],
             'notes' => ['nullable', 'string', 'max:500'],
         ]);
 
@@ -65,22 +117,29 @@ class DocumentController extends Controller
             ], 422);
         }
 
-        $user = $request->user();
+        $plot = Plot::query()->find((int) $request->input('plot_id'));
+        if (! $plot) {
+            return $this->error(__('api.land_verification.plot_not_found'), [], 404);
+        }
 
-        if (! $user) {
-            return $this->error(__('api.documents.unauthenticated'), [], 401);
+        if (! $user->nin || $plot->owner_nida !== $user->nin) {
+            return $this->error(
+                'You can only upload documents for plots linked to your NIN.',
+                ['hint' => 'Complete seller KYC with the owner NIN for this plot.'],
+                403
+            );
         }
 
         $file = $request->file('file');
         $authenticity = app(\App\Services\DocumentAuthenticityService::class)
             ->evaluate($file, (string) $request->input('document_type'));
 
-        $fileName = time() . '_' . $user->id . '_' . $file->getClientOriginalName();
+        $fileName = time().'_'.$user->id.'_'.$file->getClientOriginalName();
         $filePath = $file->storeAs('documents', $fileName, 'local');
 
         $document = Document::create([
             'user_id' => $user->id,
-            'plot_id' => $request->input('plot_id'),
+            'plot_id' => $plot->id,
             'document_type' => $request->input('document_type'),
             'file_path' => $filePath,
             'original_name' => $file->getClientOriginalName(),
@@ -98,23 +157,19 @@ class DocumentController extends Controller
             $user,
             'document',
             $document->id,
-            ['score' => $authenticity['score'], 'status' => $authenticity['review_status']],
+            [
+                'score' => $authenticity['score'],
+                'status' => $authenticity['review_status'],
+                'plot_id' => $plot->id,
+                'plot_reference' => $plot->plot_reference,
+            ],
             $request,
         );
 
+        $document->load('plot');
+
         return $this->success(__('api.documents.uploaded'), [
-            'document' => [
-                'id' => $document->id,
-                'document_type' => $document->document_type,
-                'original_name' => $document->original_name,
-                'mime_type' => $document->mime_type,
-                'size' => $document->size,
-                'size_formatted' => $document->sizeFormatted(),
-                'review_status' => $document->review_status,
-                'authenticity_score' => $document->authenticity_score,
-                'authenticity_notes' => $document->authenticity_notes,
-                'created_at' => $document->created_at->toIso8601String(),
-            ],
+            'document' => $this->documentPayload($document),
         ], 201);
     }
 
@@ -126,12 +181,20 @@ class DocumentController extends Controller
             return $this->error(__('api.documents.unauthenticated'), [], 401);
         }
 
-        $document = Document::query()
-            ->where('id', $id)
-            ->where('user_id', (int) $user->id)
-            ->first();
+        $document = Document::query()->with('plot')->find($id);
 
         if (! $document) {
+            return $this->error(__('api.documents.not_found'), [], 404);
+        }
+
+        $allowed = (int) $document->user_id === (int) $user->id
+            || ($user->isBuyer() && $document->plot_id !== null)
+            || ($user->isSeller()
+                && $user->nin
+                && $document->plot
+                && $document->plot->owner_nida === $user->nin);
+
+        if (! $allowed) {
             return $this->error(__('api.documents.not_found'), [], 404);
         }
 
@@ -148,6 +211,10 @@ class DocumentController extends Controller
 
         if (! $user) {
             return $this->error(__('api.documents.unauthenticated'), [], 401);
+        }
+
+        if (! $user->isSeller() && ! $user->isAdmin()) {
+            return $this->error('Only sellers can delete plot documents.', [], 403);
         }
 
         $document = Document::query()
@@ -215,6 +282,40 @@ class DocumentController extends Controller
                 'reviewed_at' => $document->reviewed_at?->toIso8601String(),
             ],
         ]);
+    }
+
+    private function resolvePlot(mixed $plotId, string $plotReference): ?Plot
+    {
+        if (! empty($plotId)) {
+            return Plot::query()->find((int) $plotId);
+        }
+
+        if ($plotReference === '') {
+            return null;
+        }
+
+        return Plot::query()
+            ->whereRaw('LOWER(plot_reference) = ?', [strtolower($plotReference)])
+            ->first();
+    }
+
+    private function documentPayload(Document $document): array
+    {
+        return [
+            'id' => $document->id,
+            'document_type' => $document->document_type,
+            'original_name' => $document->original_name,
+            'mime_type' => $document->mime_type,
+            'size' => $document->size,
+            'size_formatted' => $document->sizeFormatted(),
+            'notes' => $document->notes,
+            'plot_id' => $document->plot_id,
+            'plot_reference' => $document->plot?->plot_reference,
+            'review_status' => $document->review_status,
+            'authenticity_score' => $document->authenticity_score,
+            'authenticity_notes' => $document->authenticity_notes,
+            'created_at' => $document->created_at->toIso8601String(),
+        ];
     }
 
     private function success(string $message, array $data = [], int $status = 200): JsonResponse

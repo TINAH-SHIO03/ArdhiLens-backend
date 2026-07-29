@@ -16,7 +16,24 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\SetApiLocale::class,
         ]);
         $middleware->throttleApi();
+        $middleware->redirectGuestsTo(function ($request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return null;
+            }
+
+            return null;
+        });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated.',
+                    'data' => (object) [],
+                    'errors' => (object) [],
+                    'timestamp' => now()->toIso8601String(),
+                ], 401);
+            }
+        });
     })->create();

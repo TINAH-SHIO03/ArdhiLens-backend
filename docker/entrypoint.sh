@@ -20,13 +20,9 @@ until php -r '
 done
 echo "MySQL is ready."
 
-if [ ! -f .env ]; then
-    echo "ERROR: .env file missing. Copy .env.docker.example to .env before starting."
+if [ -z "${APP_KEY:-}" ]; then
+    echo "ERROR: APP_KEY is not set. Add APP_KEY to the host .env file before starting."
     exit 1
-fi
-
-if ! grep -q '^APP_KEY=base64:' .env; then
-    php artisan key:generate --force --no-interaction
 fi
 
 php artisan storage:link --force 2>/dev/null || true
