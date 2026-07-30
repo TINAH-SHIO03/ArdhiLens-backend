@@ -92,7 +92,7 @@ class CertificateAssistActions
                 ->requiresConfirmation()
                 ->modalHeading('Issue verification certificate')
                 ->modalDescription('Creates the certificate and PDF using the same rules as the mobile verification flow.')
-                ->action(function () use ($log, $assist): void {
+                ->action(function () use ($log, $assist) {
                     try {
                         $certificate = $assist->issueForLog($log, auth()->user());
                     } catch (\Throwable $e) {
