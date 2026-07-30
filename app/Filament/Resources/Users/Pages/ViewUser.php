@@ -34,7 +34,8 @@ class ViewUser extends ViewRecord
                 ->action(function (): void {
                     /** @var User $user */
                     $user = $this->record;
-                    $this->record = app(SellerKycDecisionService::class)->approve($user);
+                    app(SellerKycDecisionService::class)->approve($user);
+                    $this->record->refresh();
                     Cache::forget('filament.land_snapshot_stats');
 
                     Notification::make()->title('Seller KYC approved')->success()->send();
@@ -53,7 +54,8 @@ class ViewUser extends ViewRecord
                         ->rows(3),
                 ])
                 ->action(function (array $data): void {
-                    $this->record = app(SellerKycDecisionService::class)->reject($this->record, $data['reason']);
+                    app(SellerKycDecisionService::class)->reject($this->record, $data['reason']);
+                    $this->record->refresh();
                     Cache::forget('filament.land_snapshot_stats');
 
                     Notification::make()->title('Seller KYC rejected')->warning()->send();

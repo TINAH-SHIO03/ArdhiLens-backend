@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class SellerKycDecisionService
 {
@@ -51,15 +51,23 @@ class SellerKycDecisionService
             ? 'Your seller identity KYC was approved. You can continue ownership proof and receive buyer requests.'
             : 'Your seller KYC was rejected'.($reason ? ': '.$reason : '.').' Please resubmit with a valid NIN.';
 
-        $this->notifications->createInAppNotification(
-            $user,
-            'kyc_decision',
-            $title,
-            $body,
-            [
+        try {
+            $this->notifications->createInAppNotification(
+                $user,
+                'kyc_decision',
+                $title,
+                $body,
+                [
+                    'kyc_status' => $user->kyc_status,
+                    'screen' => 'seller_home',
+                ],
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Seller KYC decision saved but in-app notification failed', [
+                'user_id' => $user->id,
                 'kyc_status' => $user->kyc_status,
-                'screen' => 'seller_home',
-            ],
-        );
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
