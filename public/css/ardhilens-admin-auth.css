@@ -70,14 +70,20 @@ body.ardhi-auth-body {
 }
 
 .ardhi-auth-panel {
-    opacity: 0;
-    transform: translateY(18px);
-    transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.ardhi-auth-panel.is-visible {
     opacity: 1;
     transform: translateY(0);
+    animation: ardhi-auth-in 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes ardhi-auth-in {
+    from {
+        opacity: 0;
+        transform: translateY(18px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .ardhi-auth-eyebrow {
@@ -248,6 +254,7 @@ body.ardhi-auth-body {
 @media (prefers-reduced-motion: reduce) {
     .ardhi-auth-panel,
     .ardhi-btn-primary {
+        animation: none;
         transition: none;
     }
 }

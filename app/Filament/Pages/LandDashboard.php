@@ -35,6 +35,7 @@ class LandDashboard extends Dashboard
     public function getColumns(): int | array
     {
         return [
+            'default' => 1,
             'md' => 2,
             'xl' => 3,
         ];

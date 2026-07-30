@@ -12,7 +12,10 @@ use Illuminate\Database\Eloquent\Builder;
 
 class RecentHighRiskVerificationsWidget extends TableWidget
 {
+    protected static bool $isLazy = true;
+
     protected int | string | array $columnSpan = [
+        'default' => 1,
         'md' => 1,
         'xl' => 2,
     ];
@@ -23,7 +26,7 @@ class RecentHighRiskVerificationsWidget extends TableWidget
             ->heading('Recent High-Risk Verifications')
             ->query(
                 VerificationLog::query()
-                    ->with(['user', 'plot'])
+                    ->with(['user:id,email', 'plot:id,plot_reference'])
                     ->where(function (Builder $query): Builder {
                         return $query
                             ->whereIn('ai_verdict', ['CAUTION', 'DO_NOT_BUY'])
@@ -42,7 +45,7 @@ class RecentHighRiskVerificationsWidget extends TableWidget
                 TextColumn::make('user.email')
                     ->label('User')
                     ->searchable()
-                    ->toggleable(),
+                    ->toggleable(isToggledHiddenByDefault: true),
                 BadgeColumn::make('ai_verdict')
                     ->label('Verdict')
                     ->colors([
@@ -62,6 +65,8 @@ class RecentHighRiskVerificationsWidget extends TableWidget
                         'warning' => 'Incomplete',
                     ]),
             ])
+            ->defaultPaginationPageOption(5)
+            ->paginated([5, 10])
             ->recordUrl(fn (VerificationLog $record): string => VerificationLogResource::getUrl('view', ['record' => $record]));
     }
 }

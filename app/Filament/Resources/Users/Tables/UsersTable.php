@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Users\Tables;
 
 use App\Models\User;
+use App\Services\SellerKycDecisionService;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
@@ -15,6 +16,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\Cache;
 
 class UsersTable
 {
@@ -120,11 +122,8 @@ class UsersTable
                     ->modalHeading('Approve seller KYC')
                     ->modalDescription('Marks this seller as verified. Plots with matching owner_nida stay linked via their NIN.')
                     ->action(function (User $record): void {
-                        $record->update([
-                            'kyc_status' => 'verified',
-                            'verified_at' => now(),
-                            'kyc_notes' => trim(($record->kyc_notes ? $record->kyc_notes."\n" : '').'Approved by admin '.now()->toDateTimeString()),
-                        ]);
+                        app(SellerKycDecisionService::class)->approve($record);
+                        Cache::forget('filament.land_snapshot_stats');
 
                         Notification::make()
                             ->title('Seller KYC approved')
@@ -144,10 +143,8 @@ class UsersTable
                             ->rows(3),
                     ])
                     ->action(function (User $record, array $data): void {
-                        $record->update([
-                            'kyc_status' => 'rejected',
-                            'kyc_notes' => $data['reason'],
-                        ]);
+                        app(SellerKycDecisionService::class)->reject($record, $data['reason']);
+                        Cache::forget('filament.land_snapshot_stats');
 
                         Notification::make()
                             ->title('Seller KYC rejected')

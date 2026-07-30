@@ -1,4 +1,4 @@
-<div class="ardhi-auth-shell" wire:ignore.self>
+<div class="ardhi-auth-shell">
     <div class="ardhi-auth-header" aria-hidden="true">
         <div class="ardhi-auth-orb ardhi-auth-orb--one"></div>
         <div class="ardhi-auth-orb ardhi-auth-orb--two"></div>
@@ -87,11 +87,12 @@
                                 type="submit"
                                 class="btn ardhi-btn-primary w-100"
                                 wire:loading.attr="disabled"
+                                wire:target="authenticate"
                             >
                                 <span wire:loading.remove wire:target="authenticate">
                                     Sign in
                                 </span>
-                                <span wire:loading wire:target="authenticate" class="d-inline-flex align-items-center gap-2">
+                                <span wire:loading.inline-flex wire:target="authenticate" class="align-items-center gap-2">
                                     <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                                     Signing in…
                                 </span>

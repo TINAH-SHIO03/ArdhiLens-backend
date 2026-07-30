@@ -6,6 +6,7 @@ use App\Filament\Resources\Users\UserResource;
 use App\Models\Nida;
 use App\Models\Plot;
 use App\Models\User;
+use App\Services\SellerKycDecisionService;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Select;
@@ -14,6 +15,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Cache;
 
 class ViewUser extends ViewRecord
 {
@@ -32,11 +34,8 @@ class ViewUser extends ViewRecord
                 ->action(function (): void {
                     /** @var User $user */
                     $user = $this->record;
-                    $user->update([
-                        'kyc_status' => 'verified',
-                        'verified_at' => now(),
-                        'kyc_notes' => trim(($user->kyc_notes ? $user->kyc_notes."\n" : '').'Approved by admin '.now()->toDateTimeString()),
-                    ]);
+                    $this->record = app(SellerKycDecisionService::class)->approve($user);
+                    Cache::forget('filament.land_snapshot_stats');
 
                     Notification::make()->title('Seller KYC approved')->success()->send();
                 }),
@@ -54,10 +53,8 @@ class ViewUser extends ViewRecord
                         ->rows(3),
                 ])
                 ->action(function (array $data): void {
-                    $this->record->update([
-                        'kyc_status' => 'rejected',
-                        'kyc_notes' => $data['reason'],
-                    ]);
+                    $this->record = app(SellerKycDecisionService::class)->reject($this->record, $data['reason']);
+                    Cache::forget('filament.land_snapshot_stats');
 
                     Notification::make()->title('Seller KYC rejected')->warning()->send();
                 }),

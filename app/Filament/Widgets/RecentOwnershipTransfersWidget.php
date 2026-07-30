@@ -11,6 +11,8 @@ use Filament\Widgets\TableWidget;
 
 class RecentOwnershipTransfersWidget extends TableWidget
 {
+    protected static bool $isLazy = true;
+
     protected int | string | array $columnSpan = 'full';
 
     public function table(Table $table): Table
@@ -19,7 +21,7 @@ class RecentOwnershipTransfersWidget extends TableWidget
             ->heading('Recent Ownership Transfers')
             ->query(
                 PlotOwnershipHistory::query()
-                    ->with('plot')
+                    ->with('plot:id,plot_reference')
                     ->latest('transfer_date')
                     ->latest('id')
             )
@@ -35,13 +37,16 @@ class RecentOwnershipTransfersWidget extends TableWidget
                 TextColumn::make('from_nida')
                     ->label('From NIN')
                     ->placeholder('-')
-                    ->searchable(),
+                    ->searchable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('to_nida')
                     ->label('To NIN')
                     ->searchable(),
                 BadgeColumn::make('transfer_reason')
                     ->label('Reason'),
             ])
+            ->defaultPaginationPageOption(5)
+            ->paginated([5, 10])
             ->recordUrl(fn (PlotOwnershipHistory $record): string => PlotOwnershipHistoryResource::getUrl('view', ['record' => $record]));
     }
 }
