@@ -2,6 +2,11 @@
 
 namespace App\Filament\Resources\Plots;
 
+use App\Filament\Resources\Plots\RelationManagers\CaveatsRelationManager;
+use App\Filament\Resources\Plots\RelationManagers\DisputesRelationManager;
+use App\Filament\Resources\Plots\RelationManagers\EncumbrancesRelationManager;
+use App\Filament\Resources\Plots\RelationManagers\LandRatesRelationManager;
+use App\Filament\Resources\Plots\RelationManagers\OwnershipHistoriesRelationManager;
 use App\Filament\Resources\Plots\Pages\CreatePlot;
 use App\Filament\Resources\Plots\Pages\EditPlot;
 use App\Filament\Resources\Plots\Pages\ListPlots;
@@ -46,7 +51,11 @@ class PlotResource extends Resource
     public static function getRelations(): array
     {
         return [
-            //
+            OwnershipHistoriesRelationManager::class,
+            CaveatsRelationManager::class,
+            DisputesRelationManager::class,
+            EncumbrancesRelationManager::class,
+            LandRatesRelationManager::class,
         ];
     }
 

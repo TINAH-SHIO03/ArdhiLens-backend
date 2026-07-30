@@ -149,20 +149,20 @@ class CertificateService
         return $filePath;
     }
 
-    public function sendCertificateEmail(VerificationCertificate $certificate): void
+    public function sendCertificateEmail(VerificationCertificate $certificate, bool $force = false): bool
     {
         $data = $certificate->certificate_data ?? [];
-        if (! empty($data['email_sent_at'])) {
-            return;
+        if (! $force && ! empty($data['email_sent_at'])) {
+            return false;
         }
 
         if (! $certificate->pdf_path) {
-            return;
+            return false;
         }
 
         $user = $certificate->loadMissing('user')->user;
         if (! $user || empty($user->email)) {
-            return;
+            return false;
         }
 
         try {
@@ -175,12 +175,16 @@ class CertificateService
                     'email_sent_at' => now()->toIso8601String(),
                 ]),
             ]);
+
+            return true;
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('Certificate email delivery failed', [
                 'certificate_id' => $certificate->id,
                 'user_id' => $user->id,
                 'error' => $e->getMessage(),
             ]);
+
+            return false;
         }
     }
 

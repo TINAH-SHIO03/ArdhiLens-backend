@@ -25,6 +25,7 @@ class VerificationLog extends Model
         'ai_recommendation',
         'ai_payload',
         'status',
+        'admin_notes',
     ];
 
     protected $casts = [
@@ -47,6 +48,11 @@ class VerificationLog extends Model
     public function plot()
     {
         return $this->belongsTo(Plot::class);
+    }
+
+    public function certificate()
+    {
+        return $this->hasOne(VerificationCertificate::class);
     }
 
     // ─── Scopes ──────────────────────────────────────────────────

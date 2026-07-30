@@ -5,6 +5,7 @@ namespace App\Filament\Widgets;
 use App\Models\Plot;
 use App\Models\PlotDispute;
 use App\Models\User;
+use App\Models\VerificationCertificate;
 use App\Models\VerificationLog;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
@@ -50,6 +51,11 @@ class LandSnapshotStats extends StatsOverviewWidget
                     ->where('role', 'seller')
                     ->whereIn('kyc_status', ['pending_review', 'needs_manual_review', 'required'])
                     ->count(),
+                'certificates_issued' => (int) VerificationCertificate::query()->count(),
+                'certificates_expiring' => (int) VerificationCertificate::query()
+                    ->whereNotNull('expires_at')
+                    ->whereBetween('expires_at', [now(), now()->addDays(30)])
+                    ->count(),
             ];
         });
 
@@ -74,6 +80,12 @@ class LandSnapshotStats extends StatsOverviewWidget
                 ->color('danger'),
             Stat::make('Seller KYC pending', number_format($metrics['kyc_pending']))
                 ->description('Awaiting admin review')
+                ->color('warning'),
+            Stat::make('Certificates issued', number_format($metrics['certificates_issued']))
+                ->description('Pre-purchase and ownership PDFs')
+                ->color('success'),
+            Stat::make('Certs expiring soon', number_format($metrics['certificates_expiring']))
+                ->description('Within the next 30 days')
                 ->color('warning'),
         ];
     }

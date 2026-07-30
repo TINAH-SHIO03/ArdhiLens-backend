@@ -44,6 +44,11 @@ class Document extends Model
         return $this->belongsTo(Plot::class);
     }
 
+    public function reviewer()
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
     // ─── Scopes ──────────────────────────────────────────────────
 
     public function scopeByType($query, string $type)

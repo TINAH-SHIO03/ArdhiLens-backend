@@ -2,9 +2,11 @@
 
 namespace App\Filament\Resources\VerificationLogs;
 
+use App\Filament\Resources\VerificationCertificates\VerificationCertificateResource;
 use App\Filament\Resources\VerificationLogs\Pages\ListVerificationLogs;
 use App\Filament\Resources\VerificationLogs\Pages\ViewVerificationLog;
 use App\Models\VerificationLog;
+use App\Services\AdminCertificateAssistService;
 use BackedEnum;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\IconEntry;
@@ -25,7 +27,9 @@ class VerificationLogResource extends Resource
 
     protected static string | BackedEnum | null $navigationIcon = Heroicon::OutlinedShieldCheck;
 
-    protected static string | \UnitEnum | null $navigationGroup = 'Plot Operations';
+    protected static string | \UnitEnum | null $navigationGroup = 'Certificates & Verification';
+
+    protected static ?int $navigationSort = 2;
 
     protected static ?string $navigationLabel = 'Verification Logs';
 
@@ -127,6 +131,49 @@ class VerificationLogResource extends Resource
                     ])
                     ->columns(2)
                     ->collapsible(),
+                Section::make('Issued certificate')
+                    ->schema([
+                        TextEntry::make('certificate.certificate_number')
+                            ->label('Certificate number')
+                            ->placeholder('Not issued')
+                            ->url(fn (VerificationLog $record): ?string => $record->certificate
+                                ? VerificationCertificateResource::getUrl('view', ['record' => $record->certificate])
+                                : null),
+                        TextEntry::make('certificate.certificate_type')
+                            ->label('Certificate type')
+                            ->formatStateUsing(fn (?string $state): string => app(AdminCertificateAssistService::class)->typeLabel($state))
+                            ->placeholder('—'),
+                        TextEntry::make('certificate.issued_at')
+                            ->label('Issued at')
+                            ->dateTime()
+                            ->placeholder('—'),
+                        TextEntry::make('certificate_eligibility')
+                            ->label('Eligibility')
+                            ->state(function (VerificationLog $record): string {
+                                if ($record->certificate) {
+                                    return 'Certificate already issued';
+                                }
+
+                                $check = app(AdminCertificateAssistService::class)->eligibilityForLog($record);
+
+                                return $check['eligible']
+                                    ? 'Eligible — use Issue certificate action'
+                                    : 'Not eligible: '.($check['reason'] ?? 'unknown');
+                            })
+                            ->columnSpanFull()
+                            ->color(fn (VerificationLog $record): string => $record->certificate || app(AdminCertificateAssistService::class)->eligibilityForLog($record)['eligible']
+                                ? 'success'
+                                : 'danger'),
+                    ])
+                    ->columns(2),
+                Section::make('Admin notes')
+                    ->schema([
+                        TextEntry::make('admin_notes')
+                            ->placeholder('No internal notes yet.')
+                            ->columnSpanFull()
+                            ->wrap(),
+                    ])
+                    ->collapsible(),
             ]);
     }
 
@@ -176,6 +223,10 @@ class VerificationLogResource extends Resource
                 IconColumn::make('certificate_passed')
                     ->label('Cert')
                     ->boolean(),
+                TextColumn::make('certificate.certificate_number')
+                    ->label('Certificate')
+                    ->placeholder('Not issued')
+                    ->toggleable(),
             ])
             ->filters([
                 SelectFilter::make('status')

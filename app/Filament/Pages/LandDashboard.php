@@ -2,8 +2,11 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Widgets\ExpiringCertificatesWidget;
 use App\Filament\Widgets\LandSnapshotStats;
+use App\Filament\Widgets\PendingDocumentsWidget;
 use App\Filament\Widgets\PendingSellerKycWidget;
+use App\Filament\Widgets\RecentCertificatesWidget;
 use App\Filament\Widgets\RecentHighRiskVerificationsWidget;
 use App\Filament\Widgets\RecentOwnershipTransfersWidget;
 use App\Filament\Widgets\VerificationVerdictChartWidget;
@@ -23,6 +26,9 @@ class LandDashboard extends Dashboard
         return [
             LandSnapshotStats::class,
             PendingSellerKycWidget::class,
+            PendingDocumentsWidget::class,
+            RecentCertificatesWidget::class,
+            ExpiringCertificatesWidget::class,
             VerificationVerdictChartWidget::class,
             RecentHighRiskVerificationsWidget::class,
             RecentOwnershipTransfersWidget::class,
