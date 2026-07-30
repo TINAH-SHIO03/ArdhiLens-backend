@@ -1,0 +1,253 @@
+:root {
+    --ardhi-bg: #f8f6f1;
+    --ardhi-surface: #ffffff;
+    --ardhi-brand-deep: #0a3d2e;
+    --ardhi-brand: #1a6b4a;
+    --ardhi-accent: #d4af37;
+    --ardhi-text: #1a1a1a;
+    --ardhi-muted: #9e9e9e;
+    --ardhi-secondary: #616161;
+    --ardhi-danger: #dc2626;
+    --ardhi-radius: 28px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body.ardhi-auth-body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--ardhi-bg);
+    color: var(--ardhi-text);
+    font-family: "DM Sans", system-ui, sans-serif;
+}
+
+.ardhi-auth-shell {
+    position: relative;
+    min-height: 100vh;
+    overflow: hidden;
+    padding-bottom: 3rem;
+}
+
+.ardhi-auth-header {
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 280px;
+    background: linear-gradient(135deg, var(--ardhi-brand-deep) 0%, var(--ardhi-brand) 100%);
+    border-bottom-left-radius: 32px;
+    border-bottom-right-radius: 32px;
+    z-index: 0;
+}
+
+.ardhi-auth-orb {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.06);
+    pointer-events: none;
+}
+
+.ardhi-auth-orb--one {
+    width: 150px;
+    height: 150px;
+    top: -48px;
+    right: -36px;
+}
+
+.ardhi-auth-orb--two {
+    width: 90px;
+    height: 90px;
+    bottom: 24px;
+    left: 18%;
+    background: rgba(212, 175, 55, 0.12);
+}
+
+.ardhi-auth-container {
+    position: relative;
+    z-index: 1;
+    padding-top: 3.5rem;
+}
+
+.ardhi-auth-panel {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ardhi-auth-panel.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.ardhi-auth-eyebrow {
+    margin: 0 0 0.35rem;
+    color: var(--ardhi-accent);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+}
+
+.ardhi-auth-brand {
+    margin: 0 0 1.25rem;
+    font-family: "Outfit", "DM Sans", sans-serif;
+    font-size: clamp(2.4rem, 6vw, 3.2rem);
+    font-weight: 800;
+    line-height: 1.05;
+    color: var(--ardhi-accent);
+    letter-spacing: -0.02em;
+}
+
+.ardhi-auth-title {
+    margin: 0 0 0.35rem;
+    font-family: "Outfit", "DM Sans", sans-serif;
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+.ardhi-auth-subtitle {
+    margin: 0 0 2.25rem;
+    max-width: 28rem;
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 0.98rem;
+    line-height: 1.5;
+}
+
+.ardhi-auth-card {
+    background: var(--ardhi-surface);
+    border-radius: var(--ardhi-radius);
+    padding: 1.75rem;
+    box-shadow:
+        0 18px 40px rgba(10, 61, 46, 0.12),
+        0 2px 8px rgba(10, 61, 46, 0.06);
+}
+
+@media (min-width: 768px) {
+    .ardhi-auth-card {
+        padding: 1.85rem 1.85rem 2rem;
+    }
+}
+
+.ardhi-label {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--ardhi-text);
+    margin-bottom: 0.45rem;
+}
+
+.ardhi-input-group .input-group-text {
+    background: #f3f1ec;
+    border: 1.5px solid #e5e1d8;
+    border-right: 0;
+    color: var(--ardhi-brand);
+    border-radius: 14px 0 0 14px;
+}
+
+.ardhi-input-group .form-control {
+    border: 1.5px solid #e5e1d8;
+    border-left: 0;
+    min-height: 48px;
+    padding-block: 0.7rem;
+    background: #faf9f6;
+    color: var(--ardhi-text);
+    box-shadow: none;
+}
+
+.ardhi-input-group .form-control:focus {
+    background: #ffffff;
+    border-color: var(--ardhi-brand);
+    box-shadow: 0 0 0 0.2rem rgba(26, 107, 74, 0.15);
+}
+
+.ardhi-input-group:focus-within .input-group-text {
+    border-color: var(--ardhi-brand);
+    background: rgba(26, 107, 74, 0.08);
+}
+
+.ardhi-input-group .ardhi-toggle-password {
+    border: 1.5px solid #e5e1d8;
+    border-left: 0;
+    border-radius: 0 14px 14px 0;
+    background: #faf9f6;
+    color: var(--ardhi-muted);
+    min-width: 48px;
+}
+
+.ardhi-input-group .ardhi-toggle-password:hover,
+.ardhi-input-group .ardhi-toggle-password:focus {
+    background: #ffffff;
+    color: var(--ardhi-brand);
+    border-color: var(--ardhi-brand);
+}
+
+.ardhi-input-group .form-control.ardhi-password-input {
+    border-right: 0;
+    border-radius: 0;
+}
+
+.ardhi-input-group > .form-control:not(.ardhi-password-input) {
+    border-radius: 0 14px 14px 0;
+}
+
+.form-check-input:checked {
+    background-color: var(--ardhi-brand);
+    border-color: var(--ardhi-brand);
+}
+
+.form-check-input:focus {
+    box-shadow: 0 0 0 0.2rem rgba(26, 107, 74, 0.18);
+    border-color: var(--ardhi-brand);
+}
+
+.form-check-label {
+    color: var(--ardhi-secondary);
+    font-size: 0.9rem;
+}
+
+.ardhi-btn-primary {
+    --bs-btn-bg: var(--ardhi-brand-deep);
+    --bs-btn-border-color: var(--ardhi-brand-deep);
+    --bs-btn-hover-bg: var(--ardhi-brand);
+    --bs-btn-hover-border-color: var(--ardhi-brand);
+    --bs-btn-active-bg: var(--ardhi-brand);
+    --bs-btn-active-border-color: var(--ardhi-brand);
+    --bs-btn-disabled-bg: rgba(10, 61, 46, 0.5);
+    --bs-btn-disabled-border-color: transparent;
+    min-height: 50px;
+    border-radius: 16px;
+    font-weight: 700;
+    font-size: 1rem;
+    letter-spacing: 0.01em;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+    box-shadow: 0 10px 24px rgba(10, 61, 46, 0.22);
+}
+
+.ardhi-btn-primary:hover {
+    transform: translateY(-1px);
+}
+
+.ardhi-btn-primary:active {
+    transform: translateY(0);
+}
+
+.invalid-feedback {
+    color: var(--ardhi-danger);
+    font-size: 0.84rem;
+    margin-top: 0.4rem;
+}
+
+.ardhi-auth-footer {
+    margin: 1.5rem 0 0;
+    text-align: center;
+    color: var(--ardhi-muted);
+    font-size: 0.82rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ardhi-auth-panel,
+    .ardhi-btn-primary {
+        transition: none;
+    }
+}
