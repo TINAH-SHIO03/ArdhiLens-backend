@@ -12,6 +12,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Caddy terminates TLS and proxies HTTP to the container — trust forwarded proto/host.
+        $middleware->trustProxies(at: '*');
+
         $middleware->api(prepend: [
             \App\Http\Middleware\SetApiLocale::class,
         ]);
