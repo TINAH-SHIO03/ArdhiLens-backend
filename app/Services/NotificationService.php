@@ -288,6 +288,8 @@ class NotificationService
                     (string) __('api.notifications.procedure_seller_risk'),
                 'plot_status_change' =>
                     (string) __('api.notifications.procedure_seller_status'),
+                'kyc_decision' =>
+                    (string) __('api.notifications.procedure_seller_default'),
                 default =>
                     (string) __('api.notifications.procedure_seller_default'),
             };
