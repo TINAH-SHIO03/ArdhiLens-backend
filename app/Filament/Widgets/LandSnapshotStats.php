@@ -49,6 +49,14 @@ class LandSnapshotStats extends StatsOverviewWidget
             Stat::make('High-Risk Verifications', number_format($highRiskVerifications))
                 ->description('AI verdict: CAUTION or DO_NOT_BUY')
                 ->color('danger'),
+            Stat::make('Seller KYC pending', number_format(
+                \App\Models\User::query()
+                    ->where('role', 'seller')
+                    ->whereIn('kyc_status', ['pending_review', 'needs_manual_review', 'required'])
+                    ->count()
+            ))
+                ->description('Awaiting admin review')
+                ->color('warning'),
         ];
     }
 }

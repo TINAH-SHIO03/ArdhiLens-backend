@@ -6,6 +6,7 @@ return [
         'registration_successful' => 'Usajili umefanikiwa.',
         'invalid_credentials' => 'Barua pepe au nenosiri si sahihi.',
         'inactive_account' => 'Akaunti yako haijawashwa. Wasiliana na msaada.',
+        'admin_web_only' => 'Akaunti za msimamizi huingia kwenye paneli ya wavuti tu (/admin), si kwenye programu ya simu.',
         'login_successful' => 'Umeingia kwa mafanikio.',
         'logout_successful' => 'Umetoka kwenye akaunti kwa mafanikio.',
         'unauthenticated' => 'Hujaidhinishwa.',

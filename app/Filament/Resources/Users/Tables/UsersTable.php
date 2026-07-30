@@ -2,10 +2,14 @@
 
 namespace App\Filament\Resources\Users\Tables;
 
+use App\Models\User;
+use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
-use Filament\Actions\ViewAction;           // ← Add this import
+use Filament\Actions\ViewAction;
+use Filament\Forms\Components\Textarea;
+use Filament\Notifications\Notification;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -30,7 +34,7 @@ class UsersTable
                     ->label('NIN')
                     ->searchable()
                     ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(),
 
                 TextColumn::make('phone_number')
                     ->searchable()
@@ -42,6 +46,17 @@ class UsersTable
                         'admin' => 'danger',
                         'buyer' => 'warning',
                         'seller' => 'success',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+
+                TextColumn::make('kyc_status')
+                    ->label('KYC')
+                    ->badge()
+                    ->color(fn (?string $state): string => match ($state) {
+                        'verified' => 'success',
+                        'pending_review', 'needs_manual_review', 'required' => 'warning',
+                        'rejected' => 'danger',
                         default => 'gray',
                     })
                     ->sortable(),
@@ -69,6 +84,16 @@ class UsersTable
                         'buyer' => 'Buyer',
                         'seller' => 'Seller',
                     ]),
+                SelectFilter::make('kyc_status')
+                    ->label('KYC Status')
+                    ->options([
+                        'none' => 'None',
+                        'required' => 'Required',
+                        'pending_review' => 'Pending review',
+                        'needs_manual_review' => 'Needs manual review',
+                        'verified' => 'Verified',
+                        'rejected' => 'Rejected',
+                    ]),
                 TernaryFilter::make('is_active')
                     ->label('Active Status')
                     ->placeholder('All')
@@ -81,9 +106,54 @@ class UsersTable
                         false: fn ($query) => $query->whereNull('verified_at')->orWhereNull('nin'),
                     ),
             ])
+            ->defaultSort('created_at', 'desc')
             ->recordActions([
-                ViewAction::make(),     // ← Added: opens the view/infolist page
+                ViewAction::make(),
                 EditAction::make(),
+                Action::make('approveKyc')
+                    ->label('Approve KYC')
+                    ->icon('heroicon-o-check-badge')
+                    ->color('success')
+                    ->visible(fn (User $record): bool => $record->isSeller()
+                        && in_array($record->kyc_status, ['pending_review', 'needs_manual_review', 'required', 'rejected'], true))
+                    ->requiresConfirmation()
+                    ->modalHeading('Approve seller KYC')
+                    ->modalDescription('Marks this seller as verified. Plots with matching owner_nida stay linked via their NIN.')
+                    ->action(function (User $record): void {
+                        $record->update([
+                            'kyc_status' => 'verified',
+                            'verified_at' => now(),
+                            'kyc_notes' => trim(($record->kyc_notes ? $record->kyc_notes."\n" : '').'Approved by admin '.now()->toDateTimeString()),
+                        ]);
+
+                        Notification::make()
+                            ->title('Seller KYC approved')
+                            ->success()
+                            ->send();
+                    }),
+                Action::make('rejectKyc')
+                    ->label('Reject KYC')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->visible(fn (User $record): bool => $record->isSeller()
+                        && in_array($record->kyc_status, ['pending_review', 'needs_manual_review', 'required', 'verified'], true))
+                    ->form([
+                        Textarea::make('reason')
+                            ->label('Rejection reason')
+                            ->required()
+                            ->rows(3),
+                    ])
+                    ->action(function (User $record, array $data): void {
+                        $record->update([
+                            'kyc_status' => 'rejected',
+                            'kyc_notes' => $data['reason'],
+                        ]);
+
+                        Notification::make()
+                            ->title('Seller KYC rejected')
+                            ->warning()
+                            ->send();
+                    }),
             ])
             ->bulkActions([
                 BulkActionGroup::make([

@@ -6,6 +6,7 @@ return [
         'registration_successful' => 'Registration successful.',
         'invalid_credentials' => 'Invalid email or password.',
         'inactive_account' => 'Your account is inactive. Contact support.',
+        'admin_web_only' => 'Admin accounts sign in on the web panel only (/admin), not in the mobile app.',
         'login_successful' => 'Login successful.',
         'logout_successful' => 'Logout successful.',
         'unauthenticated' => 'Unauthenticated.',

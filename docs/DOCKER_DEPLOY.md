@@ -131,6 +131,24 @@ sudo ufw enable
 
 These survive container restarts and `docker compose down` (without `-v`).
 
+## Web admin panel
+
+Admin is **web-only** at `/admin` (not in the mobile app).
+
+| Item | Value |
+|------|--------|
+| URL | `https://YOUR_HOST/admin` |
+| Email | `admin@gmail.com` |
+| Password | `Admin@123` |
+
+Seed or refresh the admin user:
+
+```bash
+docker compose exec app php artisan db:seed --class=AdminUserSeeder --force
+```
+
+From the panel you can review seller KYC, set NINs, assign plots by `owner_nida`, and manage land registry records.
+
 ## Troubleshooting
 
 | Problem | Fix |

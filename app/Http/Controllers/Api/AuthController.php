@@ -124,6 +124,11 @@ class AuthController extends Controller
             return $this->error(__('api.auth.inactive_account'), [], 403);
         }
 
+        // Admin accounts are web-only (Filament at /admin). Block mobile/API login.
+        if ($user->isAdmin()) {
+            return $this->error(__('api.auth.admin_web_only'), [], 403);
+        }
+
         RateLimiter::clear($this->throttleKey($request, 'auth-login'));
         $token = $user->createToken('mobile')->plainTextToken;
         try {

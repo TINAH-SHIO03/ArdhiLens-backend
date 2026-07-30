@@ -2,12 +2,14 @@
 
 namespace App\Models;
 
+use Filament\Models\Contracts\FilamentUser;
+use Filament\Panel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable
+class User extends Authenticatable implements FilamentUser
 {
     use HasApiTokens, HasFactory, Notifiable;
 
@@ -113,11 +115,24 @@ class User extends Authenticatable
     }
 
     /**
+     * Web admin panel only — admins cannot use the mobile API console.
+     */
+    public function canAccessPanel(Panel $panel): bool
+    {
+        return $this->isAdmin() && (bool) $this->is_active;
+    }
+
+    /**
      * Check if user is admin
      */
     public function isAdmin(): bool
     {
         return $this->role === 'admin';
+    }
+
+    public function linkedPlots()
+    {
+        return $this->hasMany(Plot::class, 'owner_nida', 'nin');
     }
 
     /**

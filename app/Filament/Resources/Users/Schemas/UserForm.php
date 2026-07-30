@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Users\Schemas;
 
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
@@ -35,8 +36,8 @@ class UserForm
                     ])
                     ->columns(2),
 
-                Section::make('Personal & Verification Details')
-                    ->description('Linked NIDA and contact info')
+                Section::make('Personal & NIN Link')
+                    ->description('Link seller/buyer to NIDA. Plots with matching owner_nida appear in their app.')
                     ->icon('heroicon-o-identification')
                     ->collapsible()
                     ->schema([
@@ -44,14 +45,46 @@ class UserForm
                             ->label('NIN')
                             ->maxLength(20)
                             ->unique(ignoreRecord: true)
-                            ->disabled(),
+                            ->helperText('Set this to the owner NIN so plots auto-link to this account.'),
                         TextInput::make('phone_number')
                             ->tel()
                             ->maxLength(255),
                         DateTimePicker::make('verified_at')
-                            ->label('NIDA Verified At')
-                            ->disabled() // Optional: admins set via action, not manually
-                            ->placeholder('Auto-set on verification'),
+                            ->label('NIDA Verified At'),
+                    ])
+                    ->columns(2),
+
+                Section::make('Seller KYC')
+                    ->description('Review and update seller identity verification')
+                    ->icon('heroicon-o-shield-check')
+                    ->collapsible()
+                    ->schema([
+                        Select::make('kyc_status')
+                            ->label('KYC Status')
+                            ->options([
+                                'none' => 'None',
+                                'required' => 'Required',
+                                'pending_review' => 'Pending review',
+                                'needs_manual_review' => 'Needs manual review',
+                                'verified' => 'Verified',
+                                'rejected' => 'Rejected',
+                            ])
+                            ->required()
+                            ->default('none'),
+                        TextInput::make('face_match_score')
+                            ->label('Face match score')
+                            ->numeric()
+                            ->disabled(),
+                        Toggle::make('face_match_passed')
+                            ->label('Face match passed')
+                            ->disabled(),
+                        DateTimePicker::make('kyc_submitted_at')
+                            ->label('KYC submitted at')
+                            ->disabled(),
+                        Textarea::make('kyc_notes')
+                            ->label('KYC notes')
+                            ->rows(3)
+                            ->columnSpanFull(),
                     ])
                     ->columns(2),
 
@@ -62,16 +95,16 @@ class UserForm
                     ->schema([
                         Select::make('role')
                             ->options([
-                                'admin' => 'Admin',
+                                'admin' => 'Admin (web only)',
                                 'buyer' => 'Buyer',
                                 'seller' => 'Seller',
                             ])
                             ->required()
-                            ->default('buyer'),
+                            ->default('buyer')
+                            ->helperText('Admins sign in at /admin on the web — not in the mobile app.'),
                         Toggle::make('is_active')
                             ->label('Active')
-                            ->default(true)
-                            ->disabled(),
+                            ->default(true),
                     ])
                     ->columns(2),
             ]);
